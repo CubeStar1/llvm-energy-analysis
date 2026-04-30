@@ -1,5 +1,5 @@
 from functools import lru_cache
-from pathlib import Path
+import logging
 
 from fastapi import HTTPException
 
@@ -16,17 +16,7 @@ from backend.schemas.analyze import (
 from backend.services.compiler import CompilerExecutionError, CompilerService
 from backend.services.workspace import analysis_workspace
 
-ENERGY_KEYWORDS: dict[str, tuple[float, list[str]]] = {
-    "for": (3.6, ["CMP", "BR", "ADD"]),
-    "while": (3.4, ["CMP", "BR"]),
-    "if": (2.2, ["CMP", "BR"]),
-    "vector": (2.8, ["VEC_FALLBACK"]),
-    "float": (2.6, ["FP_FALLBACK"]),
-    "double": (2.9, ["FP_FALLBACK"]),
-    "new": (2.5, ["CALL", "STORE"]),
-    "delete": (2.3, ["CALL"]),
-    "return": (1.2, ["RET"]),
-}
+logger = logging.getLogger(__name__)
 
 
 class AnalyzerService:
@@ -35,6 +25,12 @@ class AnalyzerService:
         self._compiler = CompilerService(settings)
 
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:
+        logger.info(
+            "Starting analysis for %s with std=%s flags=%s",
+            request.filename,
+            request.std,
+            request.compilerFlags,
+        )
         with analysis_workspace() as workspace:
             source_path = workspace / request.filename
             source_path.write_text(request.code, encoding="utf-8")
@@ -46,25 +42,30 @@ class AnalyzerService:
                     source_path=source_path,
                 )
             except CompilerExecutionError as exc:
+                logger.exception("Analysis failed for %s", request.filename)
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             remarks_path = workspace / self._settings.remarks_filename
             remarks = parse_remarks_documents(remarks_path)
 
-            functions = self._build_function_summaries(request.code)
-            source_annotations = self._build_source_annotations(
-                source_code=request.code,
-                filename=request.filename,
+            functions = self._build_function_summaries(
+                compiler_output.energy_result.functions
             )
+            source_annotations: list[SourceAnnotation] = []
             summary = self._build_summary(functions, source_annotations)
 
             if not remarks:
-                remarks = self._build_stub_remarks(
+                remarks = self._build_energy_remarks(
                     filename=request.filename,
-                    used_stub=compiler_output.used_stub,
-                    source_annotations=source_annotations,
+                    function_energies=compiler_output.energy_result.functions,
                 )
 
+            logger.info(
+                "Completed analysis for %s: functions=%s remarks=%s",
+                request.filename,
+                len(functions),
+                len(remarks),
+            )
             return AnalyzeResponse(
                 runId=workspace.name,
                 llvmIr=compiler_output.llvm_ir,
@@ -74,51 +75,44 @@ class AnalyzerService:
                 remarks=remarks,
             )
 
-    def _build_function_summaries(self, source_code: str) -> list[FunctionSummary]:
-        total_raw_energy = 0.0
-        block_count = 1
-        for line in source_code.splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("//"):
-                continue
-            total_raw_energy += self._score_line(stripped)[0]
-            if "{" in stripped:
-                block_count += 1
+    def _build_function_summaries(
+        self,
+        function_energies: dict[str, float],
+    ) -> list[FunctionSummary]:
+        return sorted(
+            [
+                FunctionSummary(
+                    name=name,
+                    weightedEnergy=round(weighted_energy, 3),
+                    rawEnergy=round(weighted_energy, 3),
+                    blockCount=0,
+                )
+                for name, weighted_energy in function_energies.items()
+            ],
+            key=lambda summary: summary.weightedEnergy,
+            reverse=True,
+        )
 
-        weighted_energy = round(total_raw_energy * 1.35, 3)
+    def _build_energy_remarks(
+        self,
+        filename: str,
+        function_energies: dict[str, float],
+    ) -> list[Remark]:
         return [
-            FunctionSummary(
-                name="main",
-                weightedEnergy=weighted_energy,
-                rawEnergy=round(total_raw_energy, 3),
-                blockCount=block_count,
+            Remark(
+                kind="Analysis",
+                pass_name="energy",
+                function=name,
+                message=f"weighted energy = {weighted_energy:.2f}",
+                file=filename,
+                metadata={"weightedEnergy": round(weighted_energy, 3)},
+            )
+            for name, weighted_energy in sorted(
+                function_energies.items(),
+                key=lambda item: item[1],
+                reverse=True,
             )
         ]
-
-    def _build_source_annotations(
-        self,
-        source_code: str,
-        filename: str,
-    ) -> list[SourceAnnotation]:
-        annotations: list[SourceAnnotation] = []
-        for index, line in enumerate(source_code.splitlines(), start=1):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("//"):
-                continue
-
-            score, opcodes = self._score_line(stripped)
-            annotations.append(
-                SourceAnnotation(
-                    file=filename,
-                    line=index,
-                    weightedEnergy=round(score, 3),
-                    instructionCount=max(1, len(opcodes)),
-                    topOpcodes=opcodes,
-                )
-            )
-
-        annotations.sort(key=lambda annotation: annotation.weightedEnergy, reverse=True)
-        return annotations
 
     def _build_summary(
         self,
@@ -133,53 +127,6 @@ class AnalyzerService:
             hottestFunction=hottest_function,
             hottestLine=hottest_annotation.line if hottest_annotation else None,
         )
-
-    def _build_stub_remarks(
-        self,
-        filename: str,
-        used_stub: bool,
-        source_annotations: list[SourceAnnotation],
-    ) -> list[Remark]:
-        if not source_annotations:
-            return []
-
-        lead_annotation = source_annotations[0]
-        message = (
-            "Stub energy analysis generated from source heuristics because clang++ is not available."
-            if used_stub
-            else "LLVM IR compiled successfully; energy pass output is still stubbed until the WSL LLVM plugin is wired in."
-        )
-        return [
-            Remark(
-                kind="Analysis",
-                pass_name="energy",
-                function="main",
-                message=message,
-                file=filename,
-                line=lead_annotation.line,
-                column=lead_annotation.column,
-                metadata={
-                    "topOpcodes": lead_annotation.topOpcodes,
-                    "weightedEnergy": lead_annotation.weightedEnergy,
-                },
-            )
-        ]
-
-    def _score_line(self, line: str) -> tuple[float, list[str]]:
-        lowered = line.lower()
-        energy = 1.0
-        opcodes = ["ALU"]
-        for keyword, (weight, keyword_opcodes) in ENERGY_KEYWORDS.items():
-            if keyword in lowered:
-                energy += weight
-                opcodes = keyword_opcodes
-        if "*" in line or "/" in line:
-            energy += 1.6
-            opcodes = ["MUL", "DIV"]
-        if "[" in line and "]" in line:
-            energy += 1.8
-            opcodes = ["LOAD", "STORE"]
-        return energy, opcodes
 
 
 @lru_cache(maxsize=1)

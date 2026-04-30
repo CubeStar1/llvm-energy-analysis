@@ -19,11 +19,24 @@ uv run uvicorn backend.main:app --app-dir src --reload
 
 The service listens on `http://127.0.0.1:8000` by default.
 
+Configure the LLVM toolchain in `backend/.env`. The backend loads that file automatically.
+
+Example:
+
+```bash
+ENERGY_ANALYZER_CLANGXX=clang++-18
+ENERGY_ANALYZER_LLC=llc-18
+ENERGY_ANALYZER_LLVM_PASS_SO=/mnt/c/Users/avina/Projects/RVCE/2026/CD/llvm-pass/build/EnergyPass.so
+ENERGY_ANALYZER_LOG_LEVEL=INFO
+```
+
+A starter file is included at `backend/.env.example`.
+
 ## Current behavior
 
-- If `clang++` is available on the current machine, the backend will compile the submitted file to textual LLVM IR.
-- If `clang++` is not available, the backend returns stub LLVM IR so the frontend can still be exercised.
-- Energy remarks are still stubbed until the WSL LLVM pass is built and invoked.
+- The backend expects a real local LLVM toolchain: `clang++`, `llc`, and the built `llvm-pass/build/EnergyPass.so`.
+- `POST /analyze` compiles the submitted file to textual LLVM IR, lowers it to MIR, runs the `energy` pass, and returns real function-level energy data.
+- Source-line annotations remain empty until the LLVM pass emits source-linked remarks or structured output.
 
 ## API
 

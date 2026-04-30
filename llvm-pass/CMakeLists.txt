@@ -35,7 +35,11 @@ llvm_map_components_to_libnames(ENERGY_PASS_LINK_COMPONENTS
   TransformUtils
 )
 
-target_link_libraries(EnergyPass PRIVATE ${ENERGY_PASS_LINK_COMPONENTS})
+if(TARGET LLVM)
+  target_link_libraries(EnergyPass PRIVATE LLVM)
+else()
+  target_link_libraries(EnergyPass PRIVATE ${ENERGY_PASS_LINK_COMPONENTS})
+endif()
 
 set_target_properties(EnergyPass PROPERTIES
   PREFIX ""

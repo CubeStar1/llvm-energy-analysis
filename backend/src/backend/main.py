@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,6 +9,10 @@ from backend.core.config import get_settings
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
     app = FastAPI(
         title="LLVM Energy Analyzer Backend",
         version="0.1.0",

@@ -50,6 +50,7 @@ INITIALIZE_PASS_END(
 EnergyAnalysisPass::EnergyAnalysisPass() : MachineFunctionPass(ID) {}
 
 void EnergyAnalysisPass::getAnalysisUsage(AnalysisUsage &analysisUsage) const {
+  MachineFunctionPass::getAnalysisUsage(analysisUsage);
   analysisUsage.setPreservesAll();
 }
 
