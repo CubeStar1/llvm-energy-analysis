@@ -1,6 +1,7 @@
 "use client";
 
 import Editor from "@monaco-editor/react";
+import { useTheme } from "next-themes";
 
 type MonacoEditorProps = {
   code: string;
@@ -8,14 +9,16 @@ type MonacoEditorProps = {
 };
 
 export function MonacoEditor({ code, onChange }: MonacoEditorProps) {
+  const { theme } = useTheme();
+  const editorTheme = theme === "dark" ? "vs-dark" : "vs-light";
   return (
-    <div className="overflow-hidden rounded-[1.4rem] border border-border/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
+    <div className="flex-1 h-full w-full">
       <Editor
-        height="28rem"
+        height="100%"
         defaultLanguage="cpp"
         value={code}
         onChange={(value) => onChange(value ?? "")}
-        theme="vs-light"
+        theme={editorTheme}
         options={{
           automaticLayout: true,
           fontFamily: "var(--font-mono)",

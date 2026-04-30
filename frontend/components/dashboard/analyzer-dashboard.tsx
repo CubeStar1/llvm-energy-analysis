@@ -1,16 +1,14 @@
 "use client";
 
 import { useDeferredValue, useMemo, useState, useTransition } from "react";
-import { Cpu, FlaskConical, Zap } from "lucide-react";
-
 import { analyzeCode } from "@/lib/api";
 import { DEFAULT_SOURCE_CODE } from "@/lib/sample-program";
 import type { AnalyzeResponse } from "@/lib/types";
 import { AnalysisTabs } from "@/components/dashboard/analysis-tabs";
-import { AppHeader } from "@/components/dashboard/app-header";
 import { EditorPanel } from "@/components/dashboard/editor-panel";
 import { MetricsStrip } from "@/components/dashboard/metrics-strip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { DashboardToolbar } from "@/components/dashboard/dashboard-toolbar";
 
 const DEFAULT_FLAGS = "-O2";
 
@@ -53,35 +51,38 @@ export function AnalyzerDashboard() {
     }
   }
 
+  const isBusy = isRunning || isPending;
+
   return (
-    <main className="flex min-h-screen flex-col px-4 py-5 md:px-6 md:py-6">
-      <div className="flex w-full flex-col gap-4 flex-1">
-        <AppHeader/>
+    <div className="flex w-full h-full flex-col gap-4 flex-1 overflow-hidden">
+      <DashboardToolbar
+        std={std}
+        compilerFlags={compilerFlags}
+        isBusy={isBusy}
+        onStdChange={setStd}
+        onCompilerFlagsChange={setCompilerFlags}
+        onRunAnalysis={handleRunAnalysis}
+      />
 
+      <div className="shrink-0">
         <MetricsStrip analysis={analysis} lastRunAt={lastRunAt} />
-
-        <ResizablePanelGroup orientation="horizontal" className="flex-1 rounded-xl border">
-          <ResizablePanel defaultSize={45} minSize={30} className="p-4">
-            <EditorPanel
-              code={code}
-              compilerFlags={compilerFlags}
-              error={error}
-              isBusy={isRunning || isPending}
-              std={std}
-              onCodeChange={setCode}
-              onCompilerFlagsChange={setCompilerFlags}
-              onRunAnalysis={handleRunAnalysis}
-              onStdChange={setStd}
-            />
-          </ResizablePanel>
-          
-          <ResizableHandle withHandle />
-          
-          <ResizablePanel defaultSize={55} minSize={30} className="p-4">
-            <AnalysisTabs analysis={analysis} sourceCode={deferredCode} />
-          </ResizablePanel>
-        </ResizablePanelGroup>
       </div>
-    </main>
+
+      <ResizablePanelGroup orientation="horizontal" className="flex-1 rounded-xl border shadow-sm min-h-0 overflow-hidden">
+        <ResizablePanel defaultSize={45} minSize={30} className="p-0 bg-card">
+          <EditorPanel
+            code={code}
+            error={error}
+            onCodeChange={setCode}
+          />
+        </ResizablePanel>
+        
+        <ResizableHandle withHandle />
+        
+        <ResizablePanel defaultSize={55} minSize={30} className="p-0 bg-card border-l">
+          <AnalysisTabs analysis={analysis} sourceCode={deferredCode} />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </div>
   );
 }

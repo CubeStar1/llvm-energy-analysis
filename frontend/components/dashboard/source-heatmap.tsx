@@ -13,7 +13,7 @@ export function SourceHeatmap({ sourceCode, analysis }: SourceHeatmapProps) {
   const lines = sourceCode.split("\n");
 
   return (
-    <ScrollArea className="h-[36rem] rounded-[1.4rem] border border-border/70 bg-background/80">
+    <ScrollArea className="h-full flex-1 rounded-[1.4rem] border border-border/70 bg-background/80">
       <div className="grid min-w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 px-4 py-4 font-mono text-sm">
         {lines.map((line, index) => {
           const lineNumber = index + 1;

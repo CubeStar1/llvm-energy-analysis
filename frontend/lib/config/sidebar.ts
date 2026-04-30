@@ -3,17 +3,17 @@ import { SidebarConfig } from "@/components/global/app-sidebar";
 
 const sidebarConfig: SidebarConfig = {
   brand: {
-    title: "RPA",
+    title: "LLVM",
     icon: Icons.bot,
     href: "/"
   },
   sections: [
     {
-      label: "Projects",
+      label: "LLVM",
       items: [
         {
-          title: "Projects",
-          href: "/projects",
+          title: "Analyze",
+          href: "/analyze",
           icon: Icons.folder
         },
       ]
@@ -22,8 +22,8 @@ const sidebarConfig: SidebarConfig = {
       label: "Settings",
       items: [
         {
-          title: "Credentials",
-          href: "/projects/settings",
+          title: "Compiler",
+          href: "/settings",
           icon: Icons.settings
         }
       ]

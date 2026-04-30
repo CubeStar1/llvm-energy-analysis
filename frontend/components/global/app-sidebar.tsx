@@ -10,8 +10,8 @@ import {
 import { NavSection } from "@/components/navigation/nav-section"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
-import { NavProfile } from "@/components/navigation/nav-profile"
-import useUser from "@/hooks/use-user"
+// import { NavProfile } from "@/components/navigation/nav-profile"
+// import useUser from "@/hooks/use-user"
 import { LucideProps, LucideIcon } from "lucide-react"
 import Icons from "@/components/global/icons"
 import defaultConfig from "@/lib/config/sidebar"
@@ -47,14 +47,14 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
 }
 
 export function AppSidebar({ config = defaultConfig, ...props }: AppSidebarProps) {
-  const { data: user } = useUser()
+  // const { data: user } = useUser()
   const appName = process.env.NEXT_PUBLIC_APP_NAME!
   const appIcon = process.env.NEXT_PUBLIC_APP_ICON!
 
-  if (!user) return null
+  // if (!user) return null
 
   return (
-    <Sidebar collapsible="offcanvas" {...props}>
+    <Sidebar collapsible="offcanvas" {...props}  variant="inset">
       <SidebarHeader>
         <div className="relative border-b border-border/10 px-6 py-5 backdrop-blur-xl">
           <Link href={config.brand?.href || "/"} className="relative flex items-center gap-4">
@@ -91,7 +91,7 @@ export function AppSidebar({ config = defaultConfig, ...props }: AppSidebarProps
       </SidebarContent>
       <SidebarRail />
       <SidebarFooter>
-        <NavProfile user={user} />
+        {/* <NavProfile user={user} /> */}
       </SidebarFooter>
     </Sidebar>
   )

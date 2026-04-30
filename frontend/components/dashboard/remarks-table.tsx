@@ -16,7 +16,7 @@ type RemarksTableProps = {
 
 export function RemarksTable({ remarks }: RemarksTableProps) {
   return (
-    <ScrollArea className="h-[36rem] rounded-[1.4rem] border border-border/70 bg-background/85">
+    <ScrollArea className="h-full flex-1 rounded-[1.4rem] border border-border/70 bg-background/85">
       <Table>
         <TableHeader>
           <TableRow>
@@ -41,7 +41,14 @@ export function RemarksTable({ remarks }: RemarksTableProps) {
                     {remark.pass}
                   </Badge>
                 </TableCell>
-                <TableCell className="font-mono">{remark.function}</TableCell>
+                <TableCell className="font-mono">
+                  <div 
+                    className="max-w-[10rem] md:max-w-[14rem] lg:max-w-[18rem] truncate hover:whitespace-normal hover:break-all transition-all duration-200 cursor-default"
+                    title={remark.function}
+                  >
+                    {remark.function}
+                  </div>
+                </TableCell>
                 <TableCell className="font-mono text-muted-foreground">
                   {remark.file ? `${remark.file}:${remark.line ?? "?"}` : "—"}
                 </TableCell>
