@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     llvm_pass_so: str = str(
         Path(__file__).resolve().parents[4] / "llvm-pass" / "build" / "EnergyPass.so"
     )
+    energy_model_path: str = str(
+        Path(__file__).resolve().parents[4]
+        / "llvm-pass"
+        / "models"
+        / "x86_64-energy-model.json"
+    )
     cors_origins: list[str] = Field(
         default_factory=lambda: [
             "http://127.0.0.1:3000",
@@ -39,13 +45,23 @@ class Settings(BaseSettings):
         configured_path = Path(self.llvm_pass_so)
         if configured_path.exists():
             self.llvm_pass_so = str(configured_path)
+        else:
+            relative_to_repo = (repo_root / configured_path).resolve()
+            self.llvm_pass_so = (
+                str(relative_to_repo) if relative_to_repo.exists() else str(configured_path)
+            )
+
+        model_path = Path(self.energy_model_path)
+        if model_path.exists():
+            self.energy_model_path = str(model_path)
             return self
 
-        relative_to_repo = (repo_root / configured_path).resolve()
-        if relative_to_repo.exists():
-            self.llvm_pass_so = str(relative_to_repo)
-        else:
-            self.llvm_pass_so = str(configured_path)
+        relative_model_path = (repo_root / model_path).resolve()
+        self.energy_model_path = (
+            str(relative_model_path)
+            if relative_model_path.exists()
+            else str(model_path)
+        )
         return self
 
 

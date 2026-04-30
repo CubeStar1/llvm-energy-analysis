@@ -17,6 +17,7 @@ include(HandleLLVMOptions)
 
 add_library(EnergyPass MODULE
   src/EnergyAnalysisPass.cpp
+  src/EnergyModel.cpp
 )
 
 target_include_directories(EnergyPass

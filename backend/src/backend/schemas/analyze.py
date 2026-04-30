@@ -13,12 +13,16 @@ class FunctionSummary(BaseModel):
     weightedEnergy: float
     rawEnergy: float
     blockCount: int
+    instructionCount: int = 0
+    mappedInstructionCount: int = 0
+    fallbackInstructionCount: int = 0
 
 
 class SourceAnnotation(BaseModel):
     file: str
     line: int
     column: int = 1
+    rawEnergy: float = 0.0
     weightedEnergy: float
     instructionCount: int
     topOpcodes: list[str] = Field(default_factory=list)
@@ -36,6 +40,7 @@ class Remark(BaseModel):
 
 
 class Summary(BaseModel):
+    totalRawEnergy: float = 0.0
     totalWeightedEnergy: float
     hottestFunction: str | None = None
     hottestLine: int | None = None

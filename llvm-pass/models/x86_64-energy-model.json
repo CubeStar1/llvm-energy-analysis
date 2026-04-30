@@ -1,8 +1,23 @@
 {
   "target": "x86_64",
-  "version": 1,
+  "version": 2,
+  "methodology": {
+    "primaryPaper": "research/llvm-energy-scopes.pdf",
+    "approach": "Instruction-level machine analysis with source-scope aggregation inspired by LLVM IR energy characterization and scope propagation.",
+    "attribution": [
+      "Assign per-instruction energy from an explicit model.",
+      "Aggregate raw energy at block and function scope.",
+      "Apply block-frequency weighting for hotspot ranking.",
+      "Propagate debug locations into source-line energy scopes."
+    ],
+    "limitations": [
+      "This model is comparative and static, not a calibrated physical measurement for modern desktop x86 microarchitectures.",
+      "Unmapped opcodes fall back to bucket heuristics or the default fallback cost."
+    ]
+  },
   "references": [
-    "research/"
+    "research/llvm-energy-scopes.pdf",
+    "research/energy_characterization_and_instruction-level_energy_model_of_intels_xeon_phi_processor.pdf"
   ],
   "defaultFallbackCost": 1.0,
   "opcodeBuckets": {
@@ -16,15 +31,30 @@
   },
   "opcodeAliases": {
     "ADD64rr": "integer_alu",
+    "ADD64ri32": "integer_alu",
+    "ADD32rr": "integer_alu",
+    "SUB64ri32": "integer_alu",
     "SUB64rr": "integer_alu",
+    "IMUL64rr": "integer_alu",
+    "XOR32rr": "integer_alu",
+    "AND32rr": "integer_alu",
+    "OR32rr": "integer_alu",
     "MOV64rm": "load",
+    "MOV32rm": "load",
+    "MOVZX32rm8": "load",
     "MOV64mr": "store",
+    "MOV32mr": "store",
     "JCC_1": "branch",
+    "JMP_1": "branch",
+    "RET64": "branch",
     "CALL64pcrel32": "call",
-    "CMP64rr": "compare"
+    "CMP64rr": "compare",
+    "CMP32rr": "compare",
+    "TEST32rr": "compare"
   },
   "notes": [
-    "This MVP model is comparative, not physically calibrated.",
-    "Use fallback costs for unmapped machine opcodes until coverage improves."
+    "The model is meant to support comparative hotspot analysis and source attribution.",
+    "Alias coverage should be expanded from real opcode traces collected from representative workloads.",
+    "The pass emits structured function, block, and line scopes so downstream consumers can evolve without changing the LLVM output format."
   ]
 }

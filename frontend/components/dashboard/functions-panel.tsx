@@ -42,6 +42,8 @@ export function FunctionsPanel({ functions }: FunctionsPanelProps) {
                 <div className="mt-3 flex flex-wrap gap-4 font-mono text-xs text-muted-foreground">
                   <span>raw {entry.rawEnergy.toFixed(2)}</span>
                   <span>blocks {entry.blockCount}</span>
+                  <span>inst {entry.instructionCount}</span>
+                  <span>fallback {entry.fallbackInstructionCount}</span>
                 </div>
               </div>
             );

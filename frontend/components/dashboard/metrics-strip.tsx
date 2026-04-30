@@ -21,16 +21,21 @@ export function MetricsStrip({ analysis, lastRunAt }: MetricsStripProps) {
     },
     {
       icon: Gauge,
+      label: "Total raw energy",
+      value: summary ? summary.totalRawEnergy.toFixed(2) : EMPTY_VALUE,
+    },
+    {
+      icon: MapPinned,
       label: "Hottest function",
       value: summary?.hottestFunction ?? EMPTY_VALUE,
     },
     {
-      icon: MapPinned,
+      icon: ListTree,
       label: "Hottest line",
       value: summary?.hottestLine ? `L${summary.hottestLine}` : EMPTY_VALUE,
     },
     {
-      icon: ListTree,
+      icon: Gauge,
       label: "Last run",
       value: lastRunAt ?? "Not yet run",
     },

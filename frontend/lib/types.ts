@@ -6,6 +6,7 @@ export type AnalyzeRequest = {
 };
 
 export type Summary = {
+  totalRawEnergy: number;
   totalWeightedEnergy: number;
   hottestFunction: string | null;
   hottestLine: number | null;
@@ -16,12 +17,16 @@ export type FunctionSummary = {
   weightedEnergy: number;
   rawEnergy: number;
   blockCount: number;
+  instructionCount: number;
+  mappedInstructionCount: number;
+  fallbackInstructionCount: number;
 };
 
 export type SourceAnnotation = {
   file: string;
   line: number;
   column: number;
+  rawEnergy: number;
   weightedEnergy: number;
   instructionCount: number;
   topOpcodes: string[];

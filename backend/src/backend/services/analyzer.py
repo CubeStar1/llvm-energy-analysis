@@ -4,6 +4,7 @@ import logging
 from fastapi import HTTPException
 
 from backend.core.config import Settings, get_settings
+from backend.parsers.energy import ParsedEnergyReport
 from backend.parsers.remarks import parse_remarks_documents
 from backend.schemas.analyze import (
     AnalyzeRequest,
@@ -49,15 +50,17 @@ class AnalyzerService:
             remarks = parse_remarks_documents(remarks_path)
 
             functions = self._build_function_summaries(
-                compiler_output.energy_result.functions
+                compiler_output.energy_result.report
             )
-            source_annotations: list[SourceAnnotation] = []
+            source_annotations = self._build_source_annotations(
+                compiler_output.energy_result.report
+            )
             summary = self._build_summary(functions, source_annotations)
 
             if not remarks:
                 remarks = self._build_energy_remarks(
                     filename=request.filename,
-                    function_energies=compiler_output.energy_result.functions,
+                    report=compiler_output.energy_result.report,
                 )
 
             logger.info(
@@ -77,42 +80,87 @@ class AnalyzerService:
 
     def _build_function_summaries(
         self,
-        function_energies: dict[str, float],
+        report: ParsedEnergyReport,
     ) -> list[FunctionSummary]:
         return sorted(
             [
                 FunctionSummary(
-                    name=name,
-                    weightedEnergy=round(weighted_energy, 3),
-                    rawEnergy=round(weighted_energy, 3),
-                    blockCount=0,
+                    name=function.name,
+                    weightedEnergy=round(function.weighted_energy, 3),
+                    rawEnergy=round(function.raw_energy, 3),
+                    blockCount=function.block_count,
+                    instructionCount=function.instruction_count,
+                    mappedInstructionCount=function.mapped_instruction_count,
+                    fallbackInstructionCount=function.fallback_instruction_count,
                 )
-                for name, weighted_energy in function_energies.items()
+                for function in report.functions
             ],
             key=lambda summary: summary.weightedEnergy,
             reverse=True,
         )
 
+    def _build_source_annotations(
+        self,
+        report: ParsedEnergyReport,
+    ) -> list[SourceAnnotation]:
+        return [
+            SourceAnnotation(
+                file=annotation.file,
+                line=annotation.line,
+                column=annotation.column,
+                rawEnergy=round(annotation.raw_energy, 3),
+                weightedEnergy=round(annotation.weighted_energy, 3),
+                instructionCount=annotation.instruction_count,
+                topOpcodes=annotation.top_opcodes,
+            )
+            for annotation in report.source_annotations
+        ]
+
     def _build_energy_remarks(
         self,
         filename: str,
-        function_energies: dict[str, float],
+        report: ParsedEnergyReport,
     ) -> list[Remark]:
-        return [
+        line_remarks = [
             Remark(
                 kind="Analysis",
                 pass_name="energy",
-                function=name,
-                message=f"weighted energy = {weighted_energy:.2f}",
-                file=filename,
-                metadata={"weightedEnergy": round(weighted_energy, 3)},
+                function=annotation.function,
+                message=(
+                    f"line energy = {annotation.weighted_energy:.2f}"
+                    f" from {annotation.instruction_count} instruction(s)"
+                ),
+                file=annotation.file or filename,
+                line=annotation.line,
+                column=annotation.column,
+                metadata={
+                    "rawEnergy": round(annotation.raw_energy, 3),
+                    "weightedEnergy": round(annotation.weighted_energy, 3),
+                    "instructionCount": annotation.instruction_count,
+                    "topOpcodes": annotation.top_opcodes,
+                },
             )
-            for name, weighted_energy in sorted(
-                function_energies.items(),
-                key=lambda item: item[1],
-                reverse=True,
-            )
+            for annotation in report.source_annotations[:25]
         ]
+        function_remarks = [
+            Remark(
+                kind="Analysis",
+                pass_name="energy",
+                function=function.name,
+                message=f"function weighted energy = {function.weighted_energy:.2f}",
+                file=filename,
+                metadata={
+                    "rawEnergy": round(function.raw_energy, 3),
+                    "weightedEnergy": round(function.weighted_energy, 3),
+                    "blockCount": function.block_count,
+                    "instructionCount": function.instruction_count,
+                    "mappedInstructionCount": function.mapped_instruction_count,
+                    "fallbackInstructionCount": function.fallback_instruction_count,
+                },
+            )
+            for function in report.functions
+        ]
+        return line_remarks + function_remarks
 
     def _build_summary(
         self,
@@ -121,8 +169,10 @@ class AnalyzerService:
     ) -> Summary:
         hottest_annotation = source_annotations[0] if source_annotations else None
         hottest_function = functions[0].name if functions else None
+        total_raw_energy = sum(item.rawEnergy for item in functions)
         total_weighted_energy = sum(item.weightedEnergy for item in functions)
         return Summary(
+            totalRawEnergy=round(total_raw_energy, 3),
             totalWeightedEnergy=round(total_weighted_energy, 3),
             hottestFunction=hottest_function,
             hottestLine=hottest_annotation.line if hottest_annotation else None,

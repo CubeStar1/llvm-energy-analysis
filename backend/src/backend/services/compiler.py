@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.core.config import Settings
+from backend.parsers.energy import (
+    ParsedEnergyReport,
+    parse_energy_pass_output,
+)
 from backend.schemas.analyze import AnalyzeRequest
 
 logger = logging.getLogger(__name__)
@@ -16,7 +20,7 @@ class CompilerExecutionError(RuntimeError):
 
 @dataclass(slots=True)
 class EnergyPassResult:
-    functions: dict[str, float]
+    report: ParsedEnergyReport
     stderr: str
     command: list[str]
 
@@ -111,13 +115,14 @@ class CompilerService:
             "-load",
             self._settings.llvm_pass_so,
             "-run-pass=energy",
+            f"-energy-model={self._settings.energy_model_path}",
             str(mir_path),
             "-o",
             "/dev/null",
         ]
         stderr = await self._run_command(run_pass_command)
         return EnergyPassResult(
-            functions=self._parse_energy_output(stderr),
+            report=parse_energy_pass_output(stderr),
             stderr=stderr,
             command=run_pass_command,
         )
@@ -142,28 +147,6 @@ class CompilerService:
         if stderr_text.strip():
             logger.info("Command stderr: %s", stderr_text.strip())
         return stderr_text
-
-    @staticmethod
-    def _parse_energy_output(stderr: str) -> dict[str, float]:
-        functions: dict[str, float] = {}
-        for raw_line in stderr.splitlines():
-            line = raw_line.strip()
-            if not line.startswith("[energy] "):
-                continue
-            parts = dict(
-                item.split("=", 1)
-                for item in line.removeprefix("[energy] ").split()
-                if "=" in item
-            )
-            function_name = parts.get("function")
-            weighted_energy = parts.get("weighted-energy")
-            if function_name is None or weighted_energy is None:
-                continue
-            try:
-                functions[function_name] = float(weighted_energy)
-            except ValueError:
-                continue
-        return functions
 
     def _refresh_tool_paths(self) -> None:
         self._clangxx_path = shutil.which(self._settings.clangxx)
