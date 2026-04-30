@@ -1,0 +1,6 @@
+from fastapi import APIRouter
+
+from backend.api.routes.analyze import router as analyze_router
+
+api_router = APIRouter()
+api_router.include_router(analyze_router)

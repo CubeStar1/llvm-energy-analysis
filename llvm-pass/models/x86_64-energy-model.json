@@ -1,0 +1,30 @@
+{
+  "target": "x86_64",
+  "version": 1,
+  "references": [
+    "research/"
+  ],
+  "defaultFallbackCost": 1.0,
+  "opcodeBuckets": {
+    "integer_alu": 1.0,
+    "load": 2.0,
+    "store": 2.2,
+    "branch": 1.6,
+    "call": 3.0,
+    "compare": 1.2,
+    "fp_or_vector_fallback": 2.8
+  },
+  "opcodeAliases": {
+    "ADD64rr": "integer_alu",
+    "SUB64rr": "integer_alu",
+    "MOV64rm": "load",
+    "MOV64mr": "store",
+    "JCC_1": "branch",
+    "CALL64pcrel32": "call",
+    "CMP64rr": "compare"
+  },
+  "notes": [
+    "This MVP model is comparative, not physically calibrated.",
+    "Use fallback costs for unmapped machine opcodes until coverage improves."
+  ]
+}
