@@ -6,7 +6,6 @@ import { DEFAULT_SOURCE_CODE } from "@/lib/sample-program";
 import type { AnalyzeResponse } from "@/lib/types";
 import { AnalysisTabs } from "@/components/dashboard/analysis-tabs";
 import { EditorPanel } from "@/components/dashboard/editor-panel";
-import { MetricsStrip } from "@/components/dashboard/metrics-strip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { DashboardToolbar } from "@/components/dashboard/dashboard-toolbar";
 
@@ -64,9 +63,7 @@ export function AnalyzerDashboard() {
         onRunAnalysis={handleRunAnalysis}
       />
 
-      <div className="shrink-0">
-        <MetricsStrip analysis={analysis} lastRunAt={lastRunAt} />
-      </div>
+
 
       <ResizablePanelGroup orientation="horizontal" className="flex-1 rounded-xl border shadow-sm min-h-0 overflow-hidden">
         <ResizablePanel defaultSize={45} minSize={30} className="p-0 bg-card">
@@ -80,7 +77,7 @@ export function AnalyzerDashboard() {
         <ResizableHandle withHandle />
         
         <ResizablePanel defaultSize={55} minSize={30} className="p-0 bg-card border-l">
-          <AnalysisTabs analysis={analysis} sourceCode={deferredCode} />
+          <AnalysisTabs analysis={analysis} sourceCode={deferredCode} lastRunAt={lastRunAt} />
         </ResizablePanel>
       </ResizablePanelGroup>
     </div>
