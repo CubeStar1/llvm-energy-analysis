@@ -39,7 +39,7 @@ export function MetricsStrip({ analysis, lastRunAt }: MetricsStripProps) {
   return (
     <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       {metrics.map(({ icon: Icon, label, value }) => (
-        <Card key={label} size="sm" className="panel-sheen border-border/80 bg-card/92">
+        <Card key={label} className="shadow-sm">
           <CardHeader className="gap-2">
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="text-xs uppercase tracking-[0.18em] text-muted-foreground">

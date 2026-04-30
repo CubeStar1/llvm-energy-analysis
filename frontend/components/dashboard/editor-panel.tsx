@@ -4,7 +4,6 @@ import dynamic from "next/dynamic";
 import { Play, RefreshCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -44,23 +43,23 @@ export function EditorPanel({
   onRunAnalysis,
 }: EditorPanelProps) {
   return (
-    <Card className="panel-sheen min-h-[44rem] border-border/80 bg-card/92">
-      <CardHeader className="gap-3">
+    <div className="flex flex-col h-full gap-4">
+      <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-1">
             <p className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
               Input workspace
             </p>
-            <CardTitle className="font-heading text-2xl tracking-[-0.03em]">
+            <h2 className="font-heading text-2xl tracking-[-0.03em] font-semibold">
               Source editor
-            </CardTitle>
+            </h2>
           </div>
 
           <Button
             onClick={onRunAnalysis}
             disabled={isBusy}
             size="lg"
-            className="rounded-xl bg-primary px-4 shadow-xs"
+            className="rounded-xl px-4 shadow-xs"
           >
             {isBusy ? <RefreshCcw className="animate-spin" /> : <Play />}
             Run analysis
@@ -84,9 +83,9 @@ export function EditorPanel({
             />
           </label>
         </div>
-      </CardHeader>
+      </div>
 
-      <CardContent className="flex flex-1 flex-col gap-3">
+      <div className="flex flex-1 flex-col gap-3 min-h-[30rem]">
         <MonacoEditor code={code} onChange={onCodeChange} />
         {error ? (
           <Textarea
@@ -95,7 +94,7 @@ export function EditorPanel({
             className="min-h-24 resize-none rounded-[1.1rem] border-destructive/35 bg-destructive/5 font-mono text-sm text-destructive"
           />
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

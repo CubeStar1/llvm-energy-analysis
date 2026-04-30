@@ -3,13 +3,14 @@
 import { useDeferredValue, useMemo, useState, useTransition } from "react";
 import { Cpu, FlaskConical, Zap } from "lucide-react";
 
-import { analyzeCode, API_BASE_URL } from "@/lib/api";
+import { analyzeCode } from "@/lib/api";
 import { DEFAULT_SOURCE_CODE } from "@/lib/sample-program";
 import type { AnalyzeResponse } from "@/lib/types";
 import { AnalysisTabs } from "@/components/dashboard/analysis-tabs";
 import { AppHeader } from "@/components/dashboard/app-header";
 import { EditorPanel } from "@/components/dashboard/editor-panel";
 import { MetricsStrip } from "@/components/dashboard/metrics-strip";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 
 const DEFAULT_FLAGS = "-O2";
 
@@ -53,34 +54,33 @@ export function AnalyzerDashboard() {
   }
 
   return (
-    <main className="min-h-screen px-4 py-5 md:px-6 md:py-6">
-      <div className="lab-grid mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-[1600px] flex-col gap-4 overflow-hidden rounded-[2rem] border border-border/80 bg-background/80 p-4 shadow-[0_24px_80px_-36px_rgba(28,37,59,0.45)] backdrop-blur md:p-5">
-        <AppHeader
-          apiBaseUrl={API_BASE_URL}
-          badges={[
-            { icon: FlaskConical, label: "MVP pipeline" },
-            { icon: Cpu, label: "LLVM-aware" },
-            { icon: Zap, label: "Heatmapped source" },
-          ]}
-        />
+    <main className="flex min-h-screen flex-col px-4 py-5 md:px-6 md:py-6">
+      <div className="flex w-full flex-col gap-4 flex-1">
+        <AppHeader/>
 
         <MetricsStrip analysis={analysis} lastRunAt={lastRunAt} />
 
-        <div className="grid flex-1 gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-          <EditorPanel
-            code={code}
-            compilerFlags={compilerFlags}
-            error={error}
-            isBusy={isRunning || isPending}
-            std={std}
-            onCodeChange={setCode}
-            onCompilerFlagsChange={setCompilerFlags}
-            onRunAnalysis={handleRunAnalysis}
-            onStdChange={setStd}
-          />
-
-          <AnalysisTabs analysis={analysis} sourceCode={deferredCode} />
-        </div>
+        <ResizablePanelGroup orientation="horizontal" className="flex-1 rounded-xl border">
+          <ResizablePanel defaultSize={45} minSize={30} className="p-4">
+            <EditorPanel
+              code={code}
+              compilerFlags={compilerFlags}
+              error={error}
+              isBusy={isRunning || isPending}
+              std={std}
+              onCodeChange={setCode}
+              onCompilerFlagsChange={setCompilerFlags}
+              onRunAnalysis={handleRunAnalysis}
+              onStdChange={setStd}
+            />
+          </ResizablePanel>
+          
+          <ResizableHandle withHandle />
+          
+          <ResizablePanel defaultSize={55} minSize={30} className="p-4">
+            <AnalysisTabs analysis={analysis} sourceCode={deferredCode} />
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
     </main>
   );
