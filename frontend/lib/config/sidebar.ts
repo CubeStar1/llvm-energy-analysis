@@ -16,6 +16,11 @@ const sidebarConfig: SidebarConfig = {
           href: "/analyze",
           icon: Icons.folder
         },
+        {
+          title: "Methodology",
+          href: "/methodology",
+          icon: Icons.bookOpen
+        }
       ]
     },
     {

@@ -24,7 +24,8 @@ import {
     Home,
     Bug,
     Leaf,
-    Folder
+    Folder,
+    BookOpen
 } from "lucide-react"
 
 type IconType = {
@@ -56,7 +57,7 @@ const Icons: IconType = {
     bug: Bug,
     leaf: Leaf,
     folder: Folder,
-    
+    bookOpen: BookOpen
 }
 
 export default Icons;
