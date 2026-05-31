@@ -1,242 +1,151 @@
-# Evaluation — LLVM Static Energy Estimation Pass
+# Evaluation - LLVM Static Energy Estimation
 
-## Methodology
+## Scope
 
-The energy model is comparative and static. It does not produce physical joule measurements. Evaluation therefore focuses on:
+This project reports relative static energy, not measured joules. The pass does
+not execute the program, sample hardware counters, or model cache misses from
+real inputs. Evaluation therefore checks whether the implementation gives useful
+comparative signals:
 
-1. **Instruction classification coverage** — what fraction of instructions are matched by explicit aliases vs. heuristic fallback.
-2. **Relative ordering correctness** — does the pass rank known-hot code higher than cold code?
-3. **Source attribution accuracy** — do annotated lines correspond to the actual compute-heavy lines?
-4. **Baseline comparison** — does the pass produce meaningfully different estimates for programs with different instruction mixes?
-5. **Test case battery** — ≥5 programs covering distinct instruction profiles.
+- instructions are classified into the intended energy buckets;
+- loop-contained code receives a larger weighted score than straight-line code;
+- source annotations point at the lines that caused the machine instructions;
+- backend and frontend preserve the pass output without changing its meaning;
+- reports and tests make the static/relative nature of the estimate clear.
 
-All measurements below were taken with: `clang++-18 -g -O2`, `llc-18`, `EnergyPass.so`, model `x86_64-energy-model.json`.
+The current default path is x86-64 with LLVM 18, `clang++-18`, `llc-18`,
+`-g`, and `-O2`. The AArch64 model is present and follows the same schema, but
+the default backend configuration points at `x86_64-energy-model.json`.
 
----
+## Energy Values
 
-## Bucket cost table (model v2)
+The pass emits two energy totals for each scope:
 
-| Bucket | Cost | Instruction examples |
-|---|---|---|
-| `integer_alu` | 1.0 | ADD64rr, SUB64rr, XOR32rr, AND32rr |
-| `compare` | 1.2 | CMP64rr, CMP32rr, TEST32rr |
-| `branch` | 1.6 | JCC_1, JMP_1, RET64 |
-| `load` | 2.0 | MOV64rm, MOV32rm, MOVZX32rm8 |
-| `fp_or_vector_fallback` | 2.8 | SSE/AVX instructions (XMM/YMM/ZMM) |
-| `store` | 2.2 | MOV64mr, MOV32mr |
-| `call` | 3.0 | CALL64pcrel32 |
-| `default_fallback` | 1.0 | Any unmapped opcode |
+| Field | Meaning |
+| --- | --- |
+| `rawEnergy` | Sum of per-instruction model costs. |
+| `weightedEnergy` | Raw instruction cost multiplied by a block frequency weight. |
 
-Rationale: ratios are grounded in per-instruction relative energy characterization data from Xeon Phi energy profiling (see `research/energy_characterization_and_instruction-level_energy_model_of_intels_xeon_phi_processor.pdf`) and LLVM scope-based energy analysis (`research/llvm-energy-scopes.pdf`). Memory operations are consistently 2–3× more expensive than integer ALU across microarchitectures. Call overhead is highest due to stack frame setup and spill/restore.
+The current frequency model is a static loop-depth heuristic:
 
----
-
-## Test cases
-
-### TC-01: Minimal baseline (`testcases/01_empty_main.cpp`)
-
-```cpp
-int main() { return 0; }
+```text
+frequencyWeight = 10 ^ loopDepth
+weightedInstructionEnergy = instructionCost * frequencyWeight
 ```
 
-Expected behavior: smallest possible energy estimate; only a `RET64` and a few frame-setup instructions. Serves as the lower-bound baseline.
+This means code in a top-level loop is weighted by `10`, code in a nested loop
+by `100`, and so on. The value is a hotspot ranking heuristic. It is not the
+actual runtime trip count of a `for`, `while`, priority queue, or graph
+algorithm.
 
-Expected output (representative):
-```
-function: main  rawEnergy ≈ 3–6  instructionCount ≈ 3–5
-```
+The frontend heatmap intentionally displays weighted energy because the user is
+usually looking for hot source regions. Raw energy is still returned in the API
+and shown in summary/function views for comparison.
 
-Significance: validates that the pass produces output for the simplest legal C++ program and that energy is non-zero only because of ABI-mandated prologue/epilogue.
+## Default Model
 
----
+The x86-64 model is version 3 and lives at:
 
-### TC-02: Compute-bound loop (`testcases/02_loop_hotspot.cpp`)
-
-```cpp
-int main() {
-  int total = 0;
-  for (int i = 0; i < 1000; ++i) {
-    total += i * 3;
-  }
-  return total;
-}
+```text
+llvm-pass/models/x86_64-energy-model.json
 ```
 
-Expected behavior: loop body dominated by `ADD64rr` / `IMUL64rr` (integer ALU, cost 1.0) plus a `JCC_1` branch (cost 1.6) per iteration. The function's raw energy should be noticeably higher than TC-01. With frequency weighting enabled this would be amplified ×1000; with current weight=1.0 it reflects the single-pass instruction count.
+| Bucket | Cost | Examples |
+| --- | ---: | --- |
+| `integer_alu` | 1.0 | `ADD64rr`, `SUB32rr`, `LEA64r`, register moves |
+| `compare` | 1.2 | `CMP64rr`, `TEST32rr`, floating compare aliases |
+| `branch` | 1.6 | `JCC_1`, `JMP_4`, `RET64` |
+| `load` | 2.0 | `MOV64rm`, `MOV32rm`, scalar/vector loads |
+| `store` | 2.2 | `MOV64mr`, `MOV32mr`, scalar/vector stores |
+| `fp_or_vector_fallback` | 2.8 | SSE/AVX FP and vector operations |
+| `call` | 3.0 | `CALL64pcrel32`, indirect calls |
+| `default_fallback` | 1.0 | Last resort when no bucket can be found |
 
-Expected output:
-```
-function: main  rawEnergy ≈ 25–60  instructionCount ≈ 15–30
-hottest source line: the loop body line (total += i * 3)
-top opcodes: [ADD64rr, IMUL64rr, JCC_1] or similar
-```
+The model first applies exact opcode aliases, then falls back to LLVM
+`MachineInstr` predicates such as `isCall()`, `isBranch()`, `mayLoad()`, and
+`mayStore()`, plus opcode-name checks for compares and FP/vector work.
 
-Significance: validates source annotation — the loop body line should appear as the hottest annotation, not the return or loop header.
+## Expected Behavior on Sample Programs
 
----
+The repository keeps six representative C++ programs under `testcases/`.
 
-### TC-03: Memory-bound (`testcases/03_memory_bound.cpp`)
+| Case | Main signal expected |
+| --- | --- |
+| `01_empty_main.cpp` | Small non-zero baseline from return/prologue/epilogue instructions. |
+| `02_loop_hotspot.cpp` | Loop header/body lines should dominate weighted energy. |
+| `03_memory_bound.cpp` | Load/store-heavy functions should outrank pure integer ALU work per instruction. |
+| `04_branch_heavy.cpp` | Compare/branch chains and call sites should stand out. |
+| `05_fp_vector.cpp` | FP/vector aliases or fallback bucket should raise average cost per instruction. |
+| `06_call_chain.cpp` | Calls are expensive when not inlined; at `-O2`, inlining may collapse functions into `main`. |
 
-```cpp
-#include <cstring>
+Because analysis happens after optimization and instruction selection, exact
+line numbers and instruction counts can change with flags. For example, `-O0`
+usually preserves source structure better but emits more frame and memory
+traffic, while `-O2` may inline calls or remove dead loops.
 
-void fill(int* arr, int n) {
-  for (int i = 0; i < n; ++i)
-    arr[i] = i * 2;
-}
+## Interpreting Heatmap Output
 
-void sum_array(const int* arr, int n, long long* out) {
-  long long s = 0;
-  for (int i = 0; i < n; ++i)
-    s += arr[i];
-  *out = s;
-}
+Large values in loops are expected. For example, a source line with raw cost
+`9.2` inside a loop at depth 2 becomes `920.0` after weighting. That is a sign
+that the line is statically nested in hot control flow, not that the program
+spent exactly 920 joules or 920 cycles there.
 
-int main() {
-  int arr[256];
-  long long result = 0;
-  fill(arr, 256);
-  sum_array(arr, 256, &result);
-  return (int)result & 1;
-}
-```
+The pass emits line records keyed by `(function, file, line, column)`. The
+backend preserves those records as `sourceAnnotations`. The React source
+heatmap aggregates annotations with the same line number before displaying
+them, because users read the editor by line rather than by debug column.
 
-Expected behavior: `fill` and `sum_array` both contain `MOV64mr` / `MOV64rm` (store/load, costs 2.0–2.2), making them heavier per-instruction than TC-02. `sum_array` should appear as the hotter function because loads typically outnumber stores in a sum.
+## Backend and API Validation
 
-Expected output:
-```
-function: sum_array  rawEnergy > function: fill  (load-heavy > store-heavy)
-hottest line in sum_array: the s += arr[i] line
-top opcodes: [MOV64rm, ADD64rr, JCC_1] or similar
-```
+The Python backend is evaluated through parser, API, report, and validation
+tests. At the time of this documentation there are 32 backend tests:
 
-Significance: tests that the model correctly weights memory instructions higher than ALU, giving a different rank ordering than TC-02.
+| Area | Representative tests |
+| --- | --- |
+| Energy parser | Parses `[energy]` function and line JSON records, weighted energy, top opcodes, and mapped/fallback counts. |
+| Remarks parser | Parses LLVM optimization remarks YAML with tagged documents. |
+| API contract | `POST /analyze` returns `runId`, `llvmIr`, `summary`, `functions`, `sourceAnnotations`, and `remarks`. |
+| Error handling | Missing toolchain/pass failures return HTTP 400 with a useful message. |
+| Report output | `POST /report` returns self-contained HTML with summary cards, function table, and annotated source. |
+| Model validation | x86-64/AArch64 bucket ordering, alias coverage, model version, and fallback consistency. |
+| Frequency weighting | Weighted energy equals raw at depth 0 and exceeds raw for loop-body records. |
 
----
+Run the tests from the backend directory:
 
-### TC-04: Branch-heavy (`testcases/04_branch_heavy.cpp`)
-
-```cpp
-int classify(int x) {
-  if (x < 0)   return -1;
-  if (x == 0)  return 0;
-  if (x < 10)  return 1;
-  if (x < 100) return 2;
-  return 3;
-}
-
-int main() {
-  int total = 0;
-  for (int i = -5; i < 200; ++i)
-    total += classify(i);
-  return total;
-}
+```bash
+cd backend
+uv sync
+uv run pytest tests/ -v
 ```
 
-Expected behavior: `classify` is a chain of comparisons and conditional branches (`CMP32rr` cost 1.2, `JCC_1` cost 1.6). Energy per instruction should be higher than a pure-ALU function. `main` also carries the loop overhead plus a `CALL64pcrel32` (cost 3.0) per iteration.
+## Frontend Validation
 
-Expected output:
-```
-function: main  rawEnergy dominated by CALL64pcrel32 cost
-function: classify  rawEnergy dominated by CMP/JCC mix
-hottest annotation in main: the classify(i) call line
-```
+The frontend consumes the `AnalyzeResponse` contract in `frontend/lib/types.ts`.
+The dashboard currently provides:
 
-Significance: validates that call instructions are correctly classified as the most expensive bucket, and that the call line in `main` is attributed correctly.
+- a source editor and compile-flag controls;
+- summary cards for total weighted/raw energy, hottest function, and hottest line;
+- a weighted source heatmap;
+- LLVM IR output;
+- LLVM/native or synthesized remarks;
+- a function ranking panel with raw, weighted, block, instruction, and fallback counts.
 
----
+The source heatmap should be read as "relative weighted energy per source
+line." It is useful for spotting loop-nested or instruction-heavy code, but it
+does not replace dynamic profiling for input-sensitive algorithms.
 
-### TC-05: FP / vector path (`testcases/05_fp_vector.cpp`)
+## Known Limitations
 
-```cpp
-double dot(const double* a, const double* b, int n) {
-  double s = 0.0;
-  for (int i = 0; i < n; ++i)
-    s += a[i] * b[i];
-  return s;
-}
-
-int main() {
-  double a[64] = {}, b[64] = {};
-  for (int i = 0; i < 64; ++i) { a[i] = i; b[i] = 64 - i; }
-  return (int)dot(a, b, 64);
-}
-```
-
-Expected behavior: the `dot` product involves floating-point multiply-add. At `-O2`, clang will emit SSE/AVX instructions (opcodes like `MULSD`, `ADDSD`, or vectorized `MULPD`, `ADDPD`). These match the `fp_or_vector_fallback` heuristic (opcode contains `XMM`, `YMM`, `FADD`, `FMUL`), cost 2.8. `dot` should be significantly heavier per instruction than TC-02 (pure integer).
-
-Expected output:
-```
-function: dot  rawEnergy per instruction ≈ 2.0–2.8 average
-top opcodes include MULSD/ADDSD or VMULPD/VADDPD
-```
-
-Significance: exercises the FP/vector heuristic path and validates that FP code is ranked above equivalent integer code.
-
----
-
-### TC-06: Deep call chain (`testcases/06_call_chain.cpp`)
-
-```cpp
-int f1(int x) { return x + 1; }
-int f2(int x) { return f1(x) + f1(x + 1); }
-int f3(int x) { return f2(x) + f2(x + 2); }
-int f4(int x) { return f3(x) + f3(x + 4); }
-
-int main() {
-  int result = 0;
-  for (int i = 0; i < 16; ++i)
-    result += f4(i);
-  return result;
-}
-```
-
-Expected behavior: each function emits `CALL64pcrel32` (cost 3.0). Higher-level functions (`f4`, `f3`) will have higher raw energy. After inlining at `-O2` clang may inline some calls; if so, the hottest function will be `main` or `f4` with many arithmetic ops. This tests both the call path and inlining interaction.
-
-Expected output:
-```
-If not inlined: f4 > f3 > f2 > f1 in weighted energy (call-dominated)
-If inlined: main has highest energy; f1/f2/f3/f4 may not appear
-```
-
-Significance: tests that call-heavy code is ranked above ALU-only code, and demonstrates that `-O2` inlining can collapse the call hierarchy — a useful failure-mode illustration.
-
----
-
-## Baseline comparison
-
-The table below compares raw energy per instruction across test cases, demonstrating that the pass discriminates between instruction profiles:
-
-| Test case | Dominant bucket | Avg cost/instr (approx) | Relative rank |
-|---|---|---|---|
-| TC-01 empty main | branch (RET) | ~1.6 | lowest |
-| TC-02 compute loop | integer_alu | ~1.0–1.2 | low |
-| TC-04 branch chain | compare + branch | ~1.3–1.6 | medium |
-| TC-03 memory access | load + store | ~2.0–2.2 | high |
-| TC-05 FP/vector | fp_or_vector_fallback | ~2.4–2.8 | higher |
-| TC-06 call chain | call | ~2.5–3.0 | highest |
-
-This ordering matches the expected micro-architectural cost hierarchy: memory and FP/vector operations consume more energy than scalar integer ALU, and function call overhead dominates when calls are not inlined.
-
----
-
-## Parser unit tests
-
-The Python backend includes three unit tests (run with `uv run pytest tests/ -v`):
-
-| Test | What it verifies |
-|---|---|
-| `test_parse_energy_pass_output_extracts_functions_and_lines` | Parser correctly deserializes `kind:function` and `kind:line` records, extracts weighted energy, mapped instruction count, top opcodes |
-| `test_parse_remarks_documents` | YAML remarks parser handles LLVM-style tagged documents, extracts pass name, line, and message |
-| `test_analyze_returns_contract` | Full API contract: POST /analyze returns correct JSON fields with proper types (runId, llvmIr, summary, functions, sourceAnnotations, remarks) |
-| `test_analyze_returns_400_on_missing_toolchain` | Error path: missing LLVM tools produce HTTP 400 with a descriptive error |
-| `test_healthz` | Liveness endpoint returns `{"status":"ok"}` |
-
----
-
-## Known limitations
-
-- **Frequency weight is 1.0** — the `frequencyWeight` field is always 1.0 in the current implementation because `MachineBlockFrequencyInfo` was removed from the legacy out-of-tree pass API in LLVM 18. Weighted energy therefore equals raw energy. The architecture is in place to add frequency data without changing the output schema.
-- **Model coverage** — the alias table covers the most common x86-64 opcodes produced by clang at `-O2` for integer code. Less common opcodes (prefixed addressing modes, SIMD intrinsics) fall back to bucket heuristics.
-- **No inter-procedural analysis** — each function is analyzed independently. A call site pays the `call` bucket cost but does not include the callee's energy.
-- **Comparative only** — costs are dimensionless ratios, not joules. Physical validation would require hardware measurement against RAPL or a power meter.
+- The frequency model is static and loop-depth based. It does not know actual
+  trip counts, branch probabilities, graph sizes, input data, cache behavior, or
+  priority queue sizes.
+- The analysis is intra-procedural. A call site pays the `call` bucket cost but
+  does not include the full callee body unless optimization inlines it.
+- Source attribution depends on debug locations. Optimizations can move,
+  merge, or remove source locations.
+- Costs are dimensionless ratios calibrated from published instruction-energy
+  and optimization literature. Hardware measurement would be needed to claim
+  physical joules.
+- The backend currently parses function and line JSON records for the API.
+  Block JSON records are emitted by the pass and used for remarks/reporting
+  evolution, but they are not exposed as a first-class API list yet.

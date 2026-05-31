@@ -1,19 +1,19 @@
-# Implementation — LLVM Energy Analysis Pass
+# Implementation - LLVM Energy Analyzer
 
-## Source files
+## Main Components
 
-| File | Role |
-|---|---|
-| `llvm-pass/src/EnergyAnalysisPass.cpp` | Pass entry point, MIR traversal, output emission |
-| `llvm-pass/src/EnergyModel.cpp` | JSON model loader and instruction classifier |
-| `llvm-pass/include/energy/EnergyAnalysisPass.h` | Pass class declaration |
-| `llvm-pass/include/energy/EnergyModel.h` | `EnergyModel` and `InstructionEnergy` declarations |
-| `llvm-pass/models/x86_64-energy-model.json` | Default instruction cost table |
-| `llvm-pass/CMakeLists.txt` | Out-of-tree CMake build |
+| Area | Files | Responsibility |
+| --- | --- | --- |
+| LLVM pass | `llvm-pass/src/EnergyAnalysisPass.cpp`, `llvm-pass/include/energy/EnergyAnalysisPass.h` | Walk Machine IR, accumulate raw/weighted energy, emit JSON and LLVM remarks. |
+| Energy model | `llvm-pass/src/EnergyModel.cpp`, `llvm-pass/include/energy/EnergyModel.h`, `llvm-pass/models/*.json` | Load opcode bucket costs and classify machine instructions. |
+| Backend orchestration | `backend/src/backend/services/compiler.py` | Run `clang++`, create MIR with `llc`, load the pass, capture stderr. |
+| Backend parsing/API | `backend/src/backend/parsers/*.py`, `backend/src/backend/services/analyzer.py`, `backend/src/backend/api/routes/*.py` | Convert pass output and remarks into stable API responses and HTML reports. |
+| Frontend | `frontend/components/dashboard/*`, `frontend/lib/api.ts`, `frontend/lib/types.ts` | Submit source code, render metrics, heatmap, IR, remarks, and function rankings. |
 
----
+## LLVM Pass
 
-## Pass class
+The pass is an out-of-tree legacy `MachineFunctionPass` registered as
+`energy`:
 
 ```cpp
 class EnergyAnalysisPass final : public MachineFunctionPass {
@@ -24,227 +24,228 @@ public:
 };
 ```
 
-`MachineFunctionPass` is the LLVM legacy pass-manager base class for passes that operate on `MachineFunction` — the machine-level IR produced after instruction selection. `runOnMachineFunction` is called once per function in the module. The pass returns `false` (no modification) because it is a pure analysis.
+It declares these analysis dependencies:
 
-### Registration
+- `MachineLoopInfo`, used to compute loop depth for each machine basic block;
+- `MachineOptimizationRemarkEmitterPass`, used to emit LLVM analysis remarks.
 
-```cpp
-INITIALIZE_PASS_BEGIN(EnergyAnalysisPass, "energy",
-    "Machine-level energy estimation pass", false, true)
-INITIALIZE_PASS_END(EnergyAnalysisPass, "energy",
-    "Machine-level energy estimation pass", false, true)
-```
+The pass returns `false` because it is pure analysis and does not mutate MIR.
 
-The `INITIALIZE_PASS_*` macros register the pass under the name `"energy"` in LLVM's global pass registry. The final two booleans are `isCFGOnly=false` and `isAnalysis=true`. After registration, the pass can be invoked with `-run-pass=energy` when using `llc`.
+## Compilation Pipeline
 
-The shared object also runs a static initializer that calls `initializeEnergyAnalysisPassPass` at load time:
+The backend runs the pass in three stages inside a temporary workspace:
 
-```cpp
-namespace {
-struct RegisterEnergyAnalysisPass {
-  RegisterEnergyAnalysisPass() {
-    initializeEnergyAnalysisPassPass(*PassRegistry::getPassRegistry());
-  }
-} registerEnergyAnalysisPass;
-}
-```
-
-This is the standard pattern for out-of-tree passes loaded via `-load`.
-
----
-
-## Pipeline integration
-
-The pass is inserted at a specific point in LLVM's codegen pipeline:
-
-```
-clang++ -g -O2 -S -emit-llvm source.cpp -o source.ll
-llc-18 -O2 -stop-after=finalize-isel source.ll -o source.mir
+```text
+clang++-18 source.cpp -std=c++20 -g -S -emit-llvm [-O2] -o input.ll
+llc-18 [-O2] -stop-after=finalize-isel input.ll -o input.mir
 llc-18 -load EnergyPass.so -run-pass=energy \
-        -energy-model=models/x86_64-energy-model.json \
-        source.mir -o /dev/null
+       -energy-model=llvm-pass/models/x86_64-energy-model.json \
+       -pass-remarks-analysis=energy \
+       -pass-remarks-output=energy-remarks.yaml \
+       input.mir -o /dev/null
 ```
 
-`-stop-after=finalize-isel` stops the pipeline immediately after instruction selection is complete. The resulting `.mir` file contains real machine opcodes with DWARF debug locations attached. The second `llc` invocation loads the pass as a plugin and runs only the `energy` pass on that MIR. No object file is produced (`-o /dev/null`).
+`finalize-isel` is used because target opcodes are available and debug
+locations are still attached. The second `llc` invocation runs only the custom
+machine pass over the generated MIR. Structured `[energy]` records are written
+to stderr and parsed by the backend.
 
-Why `finalize-isel` specifically: it is the earliest point where all instructions are concrete target opcodes and debug locations are still intact. Running later (e.g., after register allocation) is also valid but introduces pseudo-instructions and copy coalescing artefacts that inflate instruction counts.
+## Energy Accumulation
 
----
+For each machine function, the pass builds three summary types:
 
-## MIR traversal
+| Summary | Key | Purpose |
+| --- | --- | --- |
+| `FunctionSummary` | function name | Function totals, block count, instruction count, mapped/fallback counts. |
+| `BlockSummary` | machine basic block | Raw/weighted block totals, loop-derived `frequencyWeight`, first source location. |
+| `SourceLocationSummary` | function, file, line, column | Source-level totals and top opcode contributors. |
 
-```cpp
-bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) {
-  const energy::EnergyModel model =
-      energy::EnergyModel::loadOrCreateDefault(EnergyModelPath);
+For every `MachineInstr`:
 
-  for (const MachineBasicBlock &block : machineFunction) {
-    for (const MachineInstr &instruction : block) {
-      const energy::InstructionEnergy ie = model.classify(instruction);
-      // accumulate into block, function, and source-location summaries
-      ...
-      const DILocation *location = instruction.getDebugLoc().get();
-      // if location != nullptr, contribute to sourceSummaries[{fn, file, line, col}]
-    }
+1. `EnergyModel::classify()` returns a bucket, cost, and fallback flag.
+2. The block's loop depth is converted to `frequencyWeight = 10^depth`.
+3. Raw energy adds the model cost.
+4. Weighted energy adds `cost * frequencyWeight`.
+5. Function and block instruction counters are incremented.
+6. If the instruction has a valid `DILocation`, the matching source summary is
+   updated.
+
+The loop-depth weighting is intentionally simple and static. It follows the
+classic Ball-Larus style assumption that each loop level represents roughly 10
+iterations.
+
+## Energy Model
+
+`EnergyModel::loadOrCreateDefault(modelPath)` starts with compiled-in defaults
+and then overlays JSON fields if a model file is available:
+
+```json
+{
+  "defaultFallbackCost": 1.0,
+  "opcodeBuckets": {
+    "integer_alu": 1.0,
+    "load": 2.0,
+    "store": 2.2,
+    "branch": 1.6,
+    "call": 3.0,
+    "compare": 1.2,
+    "fp_or_vector_fallback": 2.8
+  },
+  "opcodeAliases": {
+    "ADD64rr": "integer_alu",
+    "MOV64rm": "load",
+    "CALL64pcrel32": "call"
   }
-  // emit JSON records
-  return false;
 }
 ```
 
-Three parallel accumulators are maintained:
+Classification order:
 
-- **`FunctionSummary`** — one per `MachineFunction`; accumulates total raw/weighted energy and instruction counts.
-- **`BlockSummary`** (one per `MachineBasicBlock`) — same per-block; records the first debug location found in the block.
-- **`SourceLocationSummary`** (map keyed on `{function, file, line, column}`) — accumulates energy per unique source location; additionally tracks a per-opcode energy breakdown for `topOpcodes` reporting.
+1. Exact opcode alias lookup.
+2. `MachineInstr::isCall()`.
+3. `MachineInstr::isBranch()`.
+4. `MachineInstr::mayLoad()`.
+5. `MachineInstr::mayStore()`.
+6. Opcode name contains compare tokens such as `CMP` or `TEST`.
+7. Opcode name contains FP/vector tokens such as `XMM`, `YMM`, `ZMM`, `FADD`,
+   `FMUL`, or `FDIV`.
+8. Fallback to `integer_alu`.
 
----
+The default x86-64 model is version 3 with an expanded alias table. An AArch64
+model is also available and can be selected by changing
+`ENERGY_ANALYZER_ENERGY_MODEL_PATH`.
 
-## Energy model
+## Pass Output
 
-### Loading
+The primary machine-readable output is newline-delimited JSON on stderr. Each
+record starts with `[energy] `:
 
-`EnergyModel::loadOrCreateDefault(modelPath)` is called once per function invocation (the model is lightweight; the JSON is small). If the path is empty or unreadable, compiled-in defaults are used:
+```text
+[energy] {"kind":"function","function":"main","rawEnergy":8.2,
+  "weightedEnergy":42.2,"blockCount":4,"instructionCount":17,
+  "mappedInstructionCount":16,"fallbackInstructionCount":1}
 
-```
-integer_alu: 1.0,  load: 2.0,  store: 2.2,
-branch: 1.6,       call: 3.0,  compare: 1.2,
-fp_or_vector_fallback: 2.8
-```
-
-The JSON model supports three top-level keys:
-- `defaultFallbackCost` — cost for any instruction that does not match any alias or bucket heuristic.
-- `opcodeBuckets` — map of bucket name → cost.
-- `opcodeAliases` — map of exact opcode string → bucket name.
-
-### Classification
-
-```cpp
-InstructionEnergy EnergyModel::classify(const MachineInstr &instruction) const {
-  std::string opcodeName = instrInfo->getName(instruction.getOpcode()).str();
-
-  // 1. Exact alias lookup
-  if (auto it = OpcodeAliases.find(opcodeName); it != OpcodeAliases.end()) {
-    return { lookupBucketCost(it->second), it->second, false };
-  }
-
-  // 2. Heuristic fallback
-  std::string bucket = classifyFallbackBucket(instruction, opcodeName);
-  double cost = lookupBucketCost(bucket);
-  return { cost, bucket, /*usedDefaultFallback=*/... };
-}
-```
-
-`classifyFallbackBucket` checks `MachineInstr` predicates in priority order:
-1. `isCall()` → `call`
-2. `isBranch()` → `branch`
-3. `mayLoad()` → `load`
-4. `mayStore()` → `store`
-5. Opcode substring contains `CMP` or `TEST` → `compare`
-6. Opcode substring contains `XMM`, `YMM`, `ZMM`, `MMX`, `FP`, `FADD`, `FMUL`, `FDIV` → `fp_or_vector_fallback`
-7. Default → `integer_alu`
-
-The `usedDefaultFallback` flag is true only if the looked-up bucket is not in `BucketCosts` at all (which cannot happen for the heuristic path since all seven buckets are always populated, but matters for extensibility). The backend counts mapped vs. fallback instructions from this flag.
-
----
-
-## Output format
-
-Each record is a single JSON object on a line prefixed with `[energy] `:
-
-```
-[energy] {"kind":"function","function":"_Z3fooii","rawEnergy":14.2,
-  "weightedEnergy":14.2,"blockCount":3,"instructionCount":12,
-  "mappedInstructionCount":10,"fallbackInstructionCount":2}
-
-[energy] {"kind":"block","function":"_Z3fooii","block":"entry",
-  "rawEnergy":4.6,"weightedEnergy":4.6,"frequencyWeight":1.0,
+[energy] {"kind":"block","function":"main","block":"bb.1",
+  "rawEnergy":5.0,"weightedEnergy":50.0,"frequencyWeight":10.0,
   "instructionCount":4,"mappedInstructionCount":4,"fallbackInstructionCount":0,
-  "file":"/tmp/foo.cpp","line":3,"column":1}
+  "file":"/tmp/main.cpp","line":6,"column":3}
 
-[energy] {"kind":"line","function":"_Z3fooii","file":"/tmp/foo.cpp",
-  "line":5,"column":3,"rawEnergy":2.0,"weightedEnergy":2.0,
-  "instructionCount":1,"topOpcodes":["MOV64rm"]}
+[energy] {"kind":"line","function":"main","file":"/tmp/main.cpp",
+  "line":7,"column":5,"rawEnergy":3.2,"weightedEnergy":32.0,
+  "instructionCount":2,"topOpcodes":["ADD64rr","JCC_1"]}
 ```
 
-All float values are rounded to 6 decimal places before emission using:
+The backend parser currently consumes `function` and `line` records. `block`
+records are still emitted for debugging, future API exposure, and parity with
+the pass's internal scope model.
 
-```cpp
-double roundTo(double value, unsigned places = 6) {
-  const double scale = std::pow(10.0, static_cast<double>(places));
-  return std::round(value * scale) / scale;
-}
+The pass also emits LLVM optimization remarks:
+
+- `FunctionEnergy` remarks for each function;
+- `HotBlock` remarks for loop-weighted blocks where `frequencyWeight > 1`.
+
+The backend asks `llc` to write these to `energy-remarks.yaml` using
+`-pass-remarks-analysis=energy` and `-pass-remarks-output=...`.
+
+## Backend Flow
+
+`CompilerService.emit_llvm_ir()`:
+
+1. refreshes `clang++` and `llc` paths;
+2. writes `input.ll` using `clang++` with debug info;
+3. lowers to `input.mir`;
+4. runs the energy pass;
+5. parses pass stderr into `ParsedEnergyReport`;
+6. returns LLVM IR plus the energy result.
+
+`parse_energy_pass_output()` scans stderr for `[energy]` JSON records. It
+stores:
+
+- `ParsedFunctionEnergy` records sorted by weighted energy descending;
+- `ParsedSourceAnnotation` records sorted by weighted energy descending.
+
+`AnalyzerService.analyze()` then builds the public `AnalyzeResponse`:
+
+```text
+runId
+llvmIr
+summary
+functions
+sourceAnnotations
+remarks
 ```
 
-`topOpcodes` is the sorted list of up to three opcodes with the highest weighted energy contribution at that source location.
+Remarks come from the YAML file when present. If no YAML remarks are available,
+the backend synthesizes energy remarks from the parsed line and function data.
 
----
+## HTTP API
 
-## Debug location extraction
+`GET /healthz`
 
-```cpp
-std::string getSourceFilePath(const DILocation *location) {
-  std::string filename = location->getFilename().str();
-  const std::string directory = location->getDirectory().str();
-  if (!directory.empty() && !sys::path::is_absolute(filename)) {
-    SmallString<256> path(directory);
-    sys::path::append(path, filename);
-    return std::string(path.str());
-  }
-  return filename;
-}
+Returns backend liveness:
+
+```json
+{"status":"ok"}
 ```
 
-DWARF `DILocation` nodes carry a filename and a compilation directory. If the filename is relative (which it is for files compiled with a relative path), the directory is prepended to produce an absolute path. This ensures consistent keying in `sourceSummaries` even if the compilation was run from a different working directory.
+`POST /analyze`
 
-Instructions without a valid `DILocation` (line == 0 or location == nullptr) still contribute to block and function energy but are excluded from source-line annotations.
+Accepts C/C++ source and compile options, then returns structured JSON for the
+dashboard.
 
----
+`POST /report`
 
-## Backend pipeline (Python)
+Runs the same analysis path and returns a self-contained HTML report with
+summary cards, a function table, and annotated source.
 
-### `CompilerService` (`services/compiler.py`)
+## Frontend Flow
 
-Orchestrates two subprocesses:
+The dashboard submits `AnalyzeRequest` through `frontend/lib/api.ts`. The
+response type is declared in `frontend/lib/types.ts`.
 
-1. `clang++-18 source.cpp -g -O2 -S -emit-llvm -o workspace/input.ll`
-2. `llc-18 -O2 -stop-after=finalize-isel workspace/input.ll -o workspace/input.mir`
-3. `llc-18 -load EnergyPass.so -run-pass=energy -energy-model=... workspace/input.mir -o /dev/null`
+Visible analysis surfaces:
 
-Steps 2 and 3 are sequential (step 3 consumes step 2's output). Step 3's `stderr` is captured and passed to `parse_energy_pass_output`.
+- stats cards for total weighted/raw energy, hottest function, hottest line,
+  and last run time;
+- source heatmap using weighted energy per displayed source line;
+- LLVM IR panel;
+- remarks table;
+- function ranking panel.
 
-Each analysis runs in a `tempfile.TemporaryDirectory` (`services/workspace.py`) so concurrent requests are isolated.
+The source heatmap aggregates duplicate annotations that map to the same source
+line before rendering, because the pass may produce separate records for
+different columns or functions but the editor view is line-oriented.
 
-### `parse_energy_pass_output` (`parsers/energy.py`)
+## Build
 
-Iterates lines of stderr. Lines starting with `[energy] ` and containing a `{` are parsed as JSON. Records are dispatched by `kind` into `ParsedEnergyReport.functions` or `ParsedEnergyReport.source_annotations`. Functions and annotations are sorted by `weighted_energy` descending before being returned.
+The LLVM pass is built with CMake as a module named `EnergyPass.so`:
 
-### `AnalyzerService` (`services/analyzer.py`)
+```bash
+export CC=clang-18
+export CXX=clang++-18
+export LLVM_DIR="$(llvm-config-18 --cmakedir)"
 
-Converts `ParsedEnergyReport` to the Pydantic `AnalyzeResponse` schema consumed by the frontend. Also synthesizes `Remark` objects from energy data when no YAML remarks file is present (the fallback path).
+cmake -S llvm-pass -B llvm-pass/build -G Ninja \
+  -DLLVM_DIR="$LLVM_DIR" \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
----
-
-## Build system
-
-The pass uses out-of-tree CMake, the standard LLVM plugin build pattern:
-
-```cmake
-find_package(LLVM REQUIRED CONFIG)
-list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
-include(AddLLVM)
-include(HandleLLVMOptions)
-
-add_library(EnergyPass MODULE
-  src/EnergyAnalysisPass.cpp
-  src/EnergyModel.cpp
-)
-target_include_directories(EnergyPass PRIVATE ${LLVM_INCLUDE_DIRS} include)
-target_compile_definitions(EnergyPass PRIVATE ${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(LIBS Core CodeGen Remarks Support TransformUtils)
-target_link_libraries(EnergyPass PRIVATE LLVM)   # or ${LIBS} if no monolithic LLVM
+cmake --build llvm-pass/build
 ```
 
-`find_package(ZLIB REQUIRED)` is listed first to ensure `ZLIB::ZLIB` is resolved before LLVM's exported targets reference it — a known issue with LLVM 18's CMake exports on Ubuntu.
+On Windows, build and run the LLVM/backend portion in WSL. A build directory
+configured from WSL should not be reused from native PowerShell because CMake
+stores absolute generator paths.
 
-`CMAKE_EXPORT_COMPILE_COMMANDS ON` produces `build/compile_commands.json` for IDE tooling.
+## Verification
+
+Backend tests:
+
+```bash
+cd backend
+uv sync
+uv run pytest tests/ -v
+```
+
+Frontend lint/type checks are useful, but the current repository has unrelated
+frontend lint/type issues in navigation/global UI files. Treat those separately
+from the energy pipeline unless they are part of the current change.

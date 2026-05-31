@@ -2,6 +2,7 @@
 #include "energy/EnergyModel.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -146,7 +147,7 @@ INITIALIZE_PASS_BEGIN(
     "Machine-level energy estimation pass",
     false,
     true)
-INITIALIZE_PASS_DEPENDENCY(MachineLoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
 INITIALIZE_PASS_DEPENDENCY(MachineOptimizationRemarkEmitterPass)
 INITIALIZE_PASS_END(
     EnergyAnalysisPass,
@@ -159,7 +160,7 @@ EnergyAnalysisPass::EnergyAnalysisPass() : MachineFunctionPass(ID) {}
 
 void EnergyAnalysisPass::getAnalysisUsage(AnalysisUsage &analysisUsage) const {
   MachineFunctionPass::getAnalysisUsage(analysisUsage);
-  analysisUsage.addRequired<MachineLoopInfoWrapperPass>();
+  analysisUsage.addRequired<MachineLoopInfo>();
   analysisUsage.addRequired<MachineOptimizationRemarkEmitterPass>();
   analysisUsage.setPreservesAll();
 }
@@ -171,8 +172,7 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
   // Loop-depth static frequency heuristic: depth d → weight 10^d.
   // This matches the classic static profiler estimate (10 iterations per loop)
   // from Ball & Larus, PLDI 1994, and is used by several LLVM analysis passes.
-  const MachineLoopInfo &loopInfo =
-      getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+  const MachineLoopInfo &loopInfo = getAnalysis<MachineLoopInfo>();
   MachineOptimizationRemarkEmitter &ORE =
       getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE();
 
@@ -256,9 +256,15 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
     MachineOptimizationRemarkAnalysis FnRemark("energy", "FunctionEnergy",
                                                DL, &machineFunction.front());
     FnRemark << "function " << ore::NV("Function", functionSummary.functionName)
-             << " weighted-energy=" << ore::NV("WeightedEnergy", functionSummary.weightedEnergy)
-             << " raw-energy=" << ore::NV("RawEnergy", functionSummary.rawEnergy)
-             << " instructions=" << ore::NV("InstructionCount", functionSummary.instructionCount);
+             << " weighted-energy="
+             << ore::NV("WeightedEnergy",
+                        static_cast<float>(functionSummary.weightedEnergy))
+             << " raw-energy="
+             << ore::NV("RawEnergy",
+                        static_cast<float>(functionSummary.rawEnergy))
+             << " instructions="
+             << ore::NV("InstructionCount",
+                        functionSummary.instructionCount);
     ORE.emit(FnRemark);
   }
 
@@ -278,8 +284,12 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
                                                   BlockDL,
                                                   MBB ? MBB : &machineFunction.front());
     BlockRemark << "block " << ore::NV("Block", blockSummary.blockName)
-                << " loop-freq-weight=" << ore::NV("FrequencyWeight", blockSummary.frequencyWeight)
-                << " weighted-energy=" << ore::NV("WeightedEnergy", blockSummary.weightedEnergy);
+                << " loop-freq-weight="
+                << ore::NV("FrequencyWeight",
+                           static_cast<float>(blockSummary.frequencyWeight))
+                << " weighted-energy="
+                << ore::NV("WeightedEnergy",
+                           static_cast<float>(blockSummary.weightedEnergy));
     ORE.emit(BlockRemark);
   }
 

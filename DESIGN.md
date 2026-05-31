@@ -1,134 +1,226 @@
-# Design Document — LLVM Static Energy Estimation Pass
+# Design - Static Energy Analysis System
 
-## Problem statement
+## Problem
 
-No production compiler today provides energy feedback to the developer. Existing approaches require hardware performance counters (perf, Intel VTune, ARM Streamline), which demand physical hardware, root access, and an actual program run. The observation motivating this project: a compiler already knows the instruction mix and control-flow structure necessary for a static estimate. The goal is to produce that estimate as a compiler pass, tied to source locations, so a developer can see energy hotspots without running anything.
+Developers can usually inspect time and memory, but energy feedback is harder:
+hardware counters require a real run, platform support, permissions, and
+representative input data. This project explores a static compiler-based
+alternative. It estimates relative energy from the machine instructions LLVM
+would generate and projects those estimates back onto functions and source
+lines.
 
----
+The result is not a physical power measurement. It is a compile-time signal for
+questions like:
 
-## Design goals
+- Which function is likely more energy-heavy?
+- Which source lines sit inside statically hot loop structure?
+- Is this code dominated by integer ALU, memory, branch, call, or FP/vector
+  work?
 
-1. **Static** — no execution, no hardware counters.
-2. **Source-attributed** — results tied to file, line, and column via DWARF debug info.
-3. **Comparative, not absolute** — the model ranks hotspots relative to each other, not in joules.
-4. **Extensible model** — costs are in a JSON file, not compiled in, so the model can be updated without recompiling the pass.
-5. **Standard integration point** — uses LLVM's existing pass pipeline so it can slot into any workflow that already uses `llc`.
+## Goals
 
----
+1. Static: no execution, hardware counters, or privileged profiling.
+2. Source-attributed: use debug locations to connect machine instructions back
+   to source lines.
+3. Comparative: rank hotspots with dimensionless relative energy values.
+4. Extensible: keep target costs in JSON models rather than hardcoding every
+   opcode in C++.
+5. Usable: expose results through a FastAPI backend and a Next.js dashboard.
+6. Inspectable: emit both custom JSON records and LLVM analysis remarks.
 
-## Approach
+## Non-Goals
 
-### Why a MachineFunctionPass
+- Measuring joules, watts, cycles, cache misses, or thermal behavior.
+- Predicting actual loop trip counts or branch probabilities.
+- Inter-procedural whole-program energy accounting.
+- Replacing dynamic profilers such as `perf`, Intel VTune, ARM Streamline, or
+  RAPL-based measurement.
 
-The pass operates on Machine IR (MIR), the representation LLVM uses after instruction selection and before register allocation finalisation. This is the right level for two reasons:
+## Architecture
 
-- At MIR level, opcodes are concrete (e.g., `ADD64rr`, `MOV64rm`) rather than abstract (`add i64`), so instruction classification is precise.
-- Debug locations (`DILocation`) from DWARF survive through to MIR, enabling source-line attribution.
-
-The alternative — an IR-level (`FunctionPass` on LLVM IR) — would classify abstract IR instructions. Those abstract types map less cleanly to real hardware behaviour (an `add` in IR might lower to one integer add or to a load-and-add or to a vector operation). MIR avoids this ambiguity.
-
-### Pass type: legacy `MachineFunctionPass`
-
-LLVM has two pass manager interfaces: the legacy pass manager (LPM) and the new pass manager (NPM). The LPM is still the standard interface for machine-level passes in out-of-tree plugins. The NPM machine-pass infrastructure exists but its plugin API was not stable for external out-of-tree use in LLVM 18, so the legacy `MachineFunctionPass` + `INITIALIZE_PASS_BEGIN/END` registration pattern was chosen. This allows the pass to be loaded via `llc -load EnergyPass.so -run-pass=energy`.
-
-### Energy model: bucket classification
-
-Each machine instruction is classified into one of seven buckets:
-
-| Bucket | Relative cost | Rationale |
-|---|---|---|
-| `integer_alu` | 1.0 | Baseline: single-cycle ALU ops |
-| `compare` | 1.2 | Marginally higher due to flag write |
-| `branch` | 1.6 | Pipeline flush potential |
-| `load` | 2.0 | Cache access; L1 hit assumed |
-| `fp_or_vector_fallback` | 2.8 | Wider execution units, more ports |
-| `store` | 2.2 | Write buffer + cache coherence |
-| `call` | 3.0 | Frame setup, spills, indirect dispatch |
-
-These ratios are grounded in published per-instruction energy characterization data for x86-64 (see `research/` and the model's `references` field). The model is deliberately coarse — the goal is comparative ranking of hotspots, not physical measurement.
-
-Classification has two layers:
-1. **Opcode alias table** — exact opcode string matches in `opcodeAliases` (e.g. `ADD64rr → integer_alu`). These take precedence.
-2. **Heuristic fallback** — uses `MachineInstr` predicate methods (`isCall()`, `isBranch()`, `mayLoad()`, `mayStore()`) plus opcode substring matching (`CMP`, `XMM`, `YMM`, etc.) to infer a bucket for any opcode not in the alias table.
-
-### Output format
-
-The pass emits newline-delimited JSON records to `stderr`, prefixed with `[energy] `. Three record kinds are emitted per function:
-
-- `kind: "function"` — total raw and weighted energy, instruction counts, mapped/fallback breakdown.
-- `kind: "block"` — same aggregates per basic block, with the block's first debug location.
-- `kind: "line"` — energy attributed to each unique (function, file, line, column) source location, with top contributing opcodes.
-
-This format was chosen over LLVM optimization remarks YAML because it gives the backend fine-grained structured data with explicit field names, without requiring the pass to implement the remarks emission API. The backend parser (`parsers/energy.py`) is a simple line scanner.
-
-### Frequency weighting
-
-The design includes a `frequencyWeight` field on each block so that loop bodies can be weighted by execution count. In the current implementation this weight is always 1.0 — LLVM 18 removed the `MachineBlockFrequencyInfo` wrapper that was available in older out-of-tree pass shapes, and reintroducing it through a compatible API path is a known follow-on task. The architecture is in place; the weighted and raw energy fields are already separate in the output, so the frontend and parser can consume frequency data without changes when it is added.
-
----
-
-## Alternatives considered
-
-### Alternative 1: IR-level FunctionPass
-
-Classify LLVM IR instructions (`add`, `load`, `store`, `call`, etc.) rather than MIR opcodes.
-
-**Pros:** Simpler — no need to lower to MIR; works with any target.  
-**Cons:** IR instructions are too abstract. A single IR `load` might lower to a simple register load or to a complex addressing-mode instruction. Classification at IR level would miss this distinction. Debug location coverage is also slightly lower at IR level for some optimisation patterns.
-
-**Decision:** Rejected. MIR opcodes are more faithful to hardware behaviour.
-
-### Alternative 2: LLVM optimization remarks system
-
-Use `llvm::OptimizationRemark` / `llvm::DiagnosticInfoOptimizationBase` to emit energy data through LLVM's native `-Rpass-analysis` remark system, which writes YAML.
-
-**Pros:** Integrates with existing tooling (`opt-viewer`, IDE plugins).  
-**Cons:** The remark API in the legacy pass manager requires access to `OptimizationRemarkEmitter`, which must be explicitly requested via `getAnalysisUsage`. In LLVM 18, wiring this in an out-of-tree `MachineFunctionPass` requires additional boilerplate and the remark schema is less flexible for structured numeric data. The backend would also need to parse YAML with tagged documents.
-
-**Decision:** Rejected for the primary output. A YAML remarks parser (`parsers/remarks.py`) is included as a secondary path and will be used if the pass ever switches to the remark system.
-
-### Alternative 3: Hardware counter profiling (perf / RAPL)
-
-Instrument the compiled binary and use Linux `perf` or Intel RAPL to measure real energy.
-
-**Pros:** Physically accurate.  
-**Cons:** Requires root or `CAP_PERFMON`, a physical run, hardware that supports RAPL (not all cloud VMs do), and a representative input. Breaks the "static" goal entirely.
-
-**Decision:** Out of scope for this assignment, which explicitly requires a static compiler pass.
-
-### Alternative 4: LLVM Cost Model (TargetTransformInfo)
-
-Use `TargetTransformInfo::getInstructionCost()` which is already part of LLVM and provides target-aware instruction costs used by vectorizers and loop optimizers.
-
-**Pros:** Reuses existing LLVM infrastructure; costs already calibrated for many targets.  
-**Cons:** TTI costs are throughput estimates for vectorizer decisions, not energy proxies. They have no concept of memory-hierarchy energy, and they are not available in the legacy machine pass pipeline. Adapting them would require significant LLVM internals work.
-
-**Decision:** The bucket model is simpler, fully transparent, and directly motivated by the published energy data.
-
----
-
-## System architecture
-
+```text
+C/C++ source from dashboard
+        |
+        v
+FastAPI backend writes temporary source file
+        |
+        v
+clang++ -g -S -emit-llvm
+        |
+        v
+LLVM IR (.ll)
+        |
+        v
+llc -stop-after=finalize-isel
+        |
+        v
+Machine IR (.mir)
+        |
+        v
+llc -load EnergyPass.so -run-pass=energy
+        |
+        +--> stderr: [energy] JSON records --> backend parser
+        |
+        +--> energy-remarks.yaml -----------> remarks parser
+                                             |
+                                             v
+                                  AnalyzeResponse / HTML report
+                                             |
+                                             v
+                                  Next.js dashboard heatmap
 ```
-User C/C++ source
-        │
-        ▼
-  clang++-18 -g -O2 -S -emit-llvm
-        │
-        ▼ LLVM IR (.ll)
-        │
-  llc-18 -stop-after=finalize-isel
-        │
-        ▼ Machine IR (.mir)
-        │
-  llc-18 -load EnergyPass.so -run-pass=energy
-        │
-        ├── stderr: [energy] {JSON} lines ──► Python parser ──► FastAPI response
-        │
-        └── (no object output — analysis only)
-                                                      │
-                                                      ▼
-                                              Next.js dashboard
-                                     (Monaco editor, source heatmap,
-                                      function table, LLVM IR view)
+
+## Why Machine IR
+
+The analysis runs after instruction selection, on LLVM Machine IR. This level
+was chosen because machine opcodes are close enough to target instructions to
+make instruction-mix analysis meaningful. For example, MIR can distinguish
+`ADD64rr`, `MOV64rm`, `CALL64pcrel32`, and `JCC_1`, while LLVM IR would only
+show abstract operations such as `add`, `load`, and `call`.
+
+Machine IR also keeps useful `DILocation` metadata when code is compiled with
+`-g`, allowing the pass to attribute costs back to file, line, and column.
+
+## Pass Interface
+
+The pass uses the legacy `MachineFunctionPass` interface because this remains
+the practical out-of-tree plugin path for machine-level LLVM passes in LLVM 18.
+It is loaded with:
+
+```bash
+llc -load EnergyPass.so -run-pass=energy input.mir -o /dev/null
 ```
+
+The pass requires:
+
+- `MachineLoopInfo` for static loop-depth weighting;
+- `MachineOptimizationRemarkEmitterPass` for LLVM-native analysis remarks.
+
+## Energy Model
+
+The model is bucket-based. Exact opcode aliases take precedence, and all other
+instructions are classified with LLVM instruction predicates and opcode-name
+heuristics.
+
+| Bucket | Intent |
+| --- | --- |
+| `integer_alu` | Scalar integer arithmetic, logic, shifts, simple register moves. |
+| `compare` | Flag-setting compares and tests. |
+| `branch` | Conditional/unconditional branches and returns. |
+| `load` | Instructions that may read memory. |
+| `store` | Instructions that may write memory. |
+| `fp_or_vector_fallback` | Floating-point and SIMD/vector work. |
+| `call` | Direct or indirect calls. |
+
+The current default costs are coarse ratios, with integer ALU as the baseline.
+They are designed to preserve ordering, not to calibrate absolute energy. The
+x86-64 model includes an expanded alias table; the AArch64 model follows the
+same schema so the pass itself remains target-agnostic.
+
+## Frequency Weighting
+
+Raw instruction cost alone under-ranks loop bodies because static MIR only
+contains one copy of the loop body. The current implementation applies a static
+loop-depth estimate:
+
+```text
+depth 0 -> weight 1
+depth 1 -> weight 10
+depth 2 -> weight 100
+```
+
+This is intentionally simple and transparent. It makes nested loops visible in
+the UI without requiring runtime profiling. The tradeoff is that input-sensitive
+algorithms may look hotter or colder than they would in a real run, because the
+analysis does not know actual data sizes or branch outcomes.
+
+## Output Design
+
+The pass has two output channels.
+
+Primary channel: `[energy]` JSON lines on stderr. These are easy for the backend
+to parse and contain stable numeric fields:
+
+- `function` records for function-level totals;
+- `block` records for machine-basic-block totals and frequency weights;
+- `line` records for source-attributed totals and top opcodes.
+
+Secondary channel: LLVM optimization remarks YAML. These integrate with LLVM's
+remark mechanism and are useful for tools that already understand
+`-pass-remarks-analysis`. The backend parses YAML remarks when available and
+falls back to synthesized remarks from JSON records if needed.
+
+Using both channels gives the application a stable API-friendly data stream
+without giving up LLVM-native diagnostics.
+
+## Backend Design
+
+The backend is deliberately thin. It owns process orchestration and contract
+stability rather than energy logic:
+
+- `CompilerService` runs the toolchain and captures stderr/YAML output.
+- `parse_energy_pass_output` converts JSON lines into dataclasses.
+- `parse_remarks_documents` handles LLVM YAML remarks.
+- `AnalyzerService` builds the public Pydantic response.
+- `generate_html` creates a standalone report for sharing or archival use.
+
+Each request runs in a temporary workspace, keeping concurrent analyses
+isolated and avoiding project-directory churn.
+
+## Frontend Design
+
+The dashboard is built around repeated inspection:
+
+- edit C/C++ source;
+- select standard and compiler flags;
+- run analysis;
+- compare weighted and raw totals;
+- inspect source-line hotspots;
+- inspect LLVM IR and remarks;
+- compare functions.
+
+The heatmap intentionally shows weighted energy, because that is the most useful
+hotspot signal. Function cards also expose raw energy so users can separate
+"many instructions in a loop" from "expensive instruction mix."
+
+## Alternatives Considered
+
+### LLVM IR pass
+
+Rejected as the primary analysis level because LLVM IR is too abstract for this
+project's goal. It is portable and simpler, but less faithful to target opcode
+mix.
+
+### Dynamic hardware profiling
+
+Rejected because it violates the static/no-execution goal and requires platform
+support, permissions, and representative input. It would be the right tool for
+physical validation, not for the core assignment.
+
+### LLVM TargetTransformInfo cost model
+
+Rejected for the main estimator because TTI is intended for optimization
+profitability and throughput-style decisions. It is not an explicit energy
+model, and it does not naturally provide the source-scoped machine-instruction
+breakdown this tool needs.
+
+### Only LLVM optimization remarks
+
+Rejected as the only output channel because YAML remarks are less convenient as
+an application data contract. The current design keeps remarks, but uses JSON
+lines as the primary backend input.
+
+## Risks and Limitations
+
+- Debug information can be imperfect after optimization.
+- Inlining can remove functions or move energy into callers.
+- Static loop-depth weighting can exaggerate loops with small trip counts and
+  understate loops with large or input-dependent trip counts.
+- The model treats memory operations coarsely and does not distinguish L1 hits,
+  cache misses, DRAM traffic, or vector width in a calibrated way.
+- The backend currently exposes function and source-line records; block records
+  are emitted by the pass but not yet first-class in the public response.
+
+These limitations are acceptable for the current goal: a transparent static
+compiler analysis that helps developers compare likely energy hotspots before
+running the program.

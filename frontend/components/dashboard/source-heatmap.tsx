@@ -7,9 +7,22 @@ type SourceHeatmapProps = {
 };
 
 export function SourceHeatmap({ sourceCode, analysis }: SourceHeatmapProps) {
-  const energyByLine = new Map(
-    (analysis?.sourceAnnotations ?? []).map((annotation) => [annotation.line, annotation]),
-  );
+  const energyByLine = new Map<number, NonNullable<AnalyzeResponse["sourceAnnotations"]>[number]>();
+  for (const annotation of analysis?.sourceAnnotations ?? []) {
+    const current = energyByLine.get(annotation.line);
+    if (!current) {
+      energyByLine.set(annotation.line, annotation);
+      continue;
+    }
+
+    energyByLine.set(annotation.line, {
+      ...current,
+      rawEnergy: current.rawEnergy + annotation.rawEnergy,
+      weightedEnergy: current.weightedEnergy + annotation.weightedEnergy,
+      instructionCount: current.instructionCount + annotation.instructionCount,
+      topOpcodes: Array.from(new Set([...current.topOpcodes, ...annotation.topOpcodes])),
+    });
+  }
   const lines = sourceCode.split("\n");
 
   return (
