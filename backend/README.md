@@ -1,42 +1,49 @@
 # Backend
 
-FastAPI orchestration service for the LLVM energy analyzer MVP.
+FastAPI orchestration service for the LLVM energy analyzer.
 
-## Why this shape
+## Structure
 
-- `api/` keeps HTTP concerns small.
-- `services/` owns orchestration and subprocess work.
-- `parsers/` is isolated so LLVM/YAML normalization stays testable.
-- `schemas/` defines the frontend contract in one place.
+- `api/` — HTTP endpoints
+- `services/` — orchestration and subprocess logic
+- `parsers/` — LLVM output and YAML remarks parsing
+- `schemas/` — shared request/response types
 
 ## Local development
 
-```powershell
+Run from the repo root in WSL/Linux:
+
+```bash
 cd backend
+cp .env.example .env   # first time only
 uv sync
+uv run backend
+```
+
+For hot reload during development:
+
+```bash
 uv run uvicorn backend.main:app --app-dir src --reload
 ```
 
-The service listens on `http://127.0.0.1:8000` by default.
+Listens on `http://127.0.0.1:8000`.
 
-Configure the LLVM toolchain in `backend/.env`. The backend loads that file automatically.
+## Configuration
 
-Example:
+Settings are read from `backend/.env`. A starter file is at `backend/.env.example`.
 
-```bash
+```
 ENERGY_ANALYZER_CLANGXX=clang++-18
 ENERGY_ANALYZER_LLC=llc-18
-ENERGY_ANALYZER_LLVM_PASS_SO=/mnt/c/Users/avina/Projects/RVCE/2026/CD/llvm-pass/build/EnergyPass.so
+ENERGY_ANALYZER_LLVM_PASS_SO=../llvm-pass/build/EnergyPass.so
 ENERGY_ANALYZER_LOG_LEVEL=INFO
 ```
 
-A starter file is included at `backend/.env.example`.
+Build the pass first if `EnergyPass.so` is missing:
 
-## Current behavior
-
-- The backend expects a real local LLVM toolchain: `clang++`, `llc`, and the built `llvm-pass/build/EnergyPass.so`.
-- `POST /analyze` compiles the submitted file to textual LLVM IR, lowers it to MIR, runs the `energy` pass, and returns real function-level energy data.
-- Source-line annotations remain empty until the LLVM pass emits source-linked remarks or structured output.
+```bash
+./llvm-pass/scripts/build.sh
+```
 
 ## API
 
@@ -51,10 +58,8 @@ A starter file is included at `backend/.env.example`.
 }
 ```
 
-The response matches the contract from `IMPLEMENTATION_PLAN.md` and always includes:
+Response fields: `llvmIr`, `summary`, `functions`, `sourceAnnotations`, `remarks`.
 
-- `llvmIr`
-- `summary`
-- `functions`
-- `sourceAnnotations`
-- `remarks`
+### `GET /healthz`
+
+Liveness check.

@@ -218,22 +218,21 @@ different columns or functions but the editor view is line-oriented.
 
 ## Build
 
-The LLVM pass is built with CMake as a module named `EnergyPass.so`:
+The LLVM pass is built as an out-of-tree CMake module producing `EnergyPass.so`.
+Use the provided script from the repo root in WSL/Linux:
 
 ```bash
-export CC=clang-18
-export CXX=clang++-18
-export LLVM_DIR="$(llvm-config-18 --cmakedir)"
+./llvm-pass/scripts/build.sh
+```
 
-cmake -S llvm-pass -B llvm-pass/build -G Ninja \
-  -DLLVM_DIR="$LLVM_DIR" \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo
+To run the pass over all testcases without the backend or frontend:
 
-cmake --build llvm-pass/build
+```bash
+./scripts/run-tests.sh
 ```
 
 On Windows, build and run the LLVM/backend portion in WSL. A build directory
-configured from WSL should not be reused from native PowerShell because CMake
+configured from WSL must not be reused from native PowerShell because CMake
 stores absolute generator paths.
 
 ## Verification
@@ -241,11 +240,11 @@ stores absolute generator paths.
 Backend tests:
 
 ```bash
-cd backend
-uv sync
-uv run pytest tests/ -v
+cd backend && uv run pytest tests/ -v
 ```
 
-Frontend lint/type checks are useful, but the current repository has unrelated
-frontend lint/type issues in navigation/global UI files. Treat those separately
-from the energy pipeline unless they are part of the current change.
+Frontend lint:
+
+```bash
+cd frontend && npm run lint
+```
