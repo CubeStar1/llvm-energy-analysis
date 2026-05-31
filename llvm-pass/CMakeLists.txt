@@ -29,6 +29,7 @@ target_include_directories(EnergyPass
 target_compile_definitions(EnergyPass PRIVATE ${LLVM_DEFINITIONS})
 
 llvm_map_components_to_libnames(ENERGY_PASS_LINK_COMPONENTS
+  Analysis
   Core
   CodeGen
   Remarks

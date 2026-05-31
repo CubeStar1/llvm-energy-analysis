@@ -5,6 +5,8 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineLoopInfo.h"
+#include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -144,6 +146,8 @@ INITIALIZE_PASS_BEGIN(
     "Machine-level energy estimation pass",
     false,
     true)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineOptimizationRemarkEmitterPass)
 INITIALIZE_PASS_END(
     EnergyAnalysisPass,
     "energy",
@@ -155,12 +159,22 @@ EnergyAnalysisPass::EnergyAnalysisPass() : MachineFunctionPass(ID) {}
 
 void EnergyAnalysisPass::getAnalysisUsage(AnalysisUsage &analysisUsage) const {
   MachineFunctionPass::getAnalysisUsage(analysisUsage);
+  analysisUsage.addRequired<MachineLoopInfoWrapperPass>();
+  analysisUsage.addRequired<MachineOptimizationRemarkEmitterPass>();
   analysisUsage.setPreservesAll();
 }
 
 bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) {
   const energy::EnergyModel model =
       energy::EnergyModel::loadOrCreateDefault(EnergyModelPath);
+
+  // Loop-depth static frequency heuristic: depth d → weight 10^d.
+  // This matches the classic static profiler estimate (10 iterations per loop)
+  // from Ball & Larus, PLDI 1994, and is used by several LLVM analysis passes.
+  const MachineLoopInfo &loopInfo =
+      getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+  MachineOptimizationRemarkEmitter &ORE =
+      getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE();
 
   FunctionSummary functionSummary;
   functionSummary.functionName = machineFunction.getName().str();
@@ -171,11 +185,8 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
   for (const MachineBasicBlock &block : machineFunction) {
     BlockSummary blockSummary;
     blockSummary.blockName = block.getName().str();
-    // LLVM 18 no longer exposes the legacy MBFI wrapper used by the earlier
-    // scaffold in this pass shape, so we currently keep weighted energy equal
-    // to raw energy until we reintroduce frequency data through a compatible
-    // analysis path.
-    blockSummary.frequencyWeight = 1.0;
+    const unsigned loopDepth = loopInfo.getLoopDepth(&block);
+    blockSummary.frequencyWeight = std::pow(10.0, static_cast<double>(loopDepth));
 
     for (const MachineInstr &instruction : block) {
       const energy::InstructionEnergy instructionEnergy =
@@ -235,6 +246,42 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
 
   functionSummary.rawEnergy = roundTo(functionSummary.rawEnergy);
   functionSummary.weightedEnergy = roundTo(functionSummary.weightedEnergy);
+
+  // Emit LLVM optimization remark so -pass-remarks-analysis=energy works.
+  {
+    DebugLoc DL;
+    if (auto *SP = machineFunction.getFunction().getSubprogram()) {
+      DL = DILocation::get(SP->getContext(), SP->getLine(), 0, SP);
+    }
+    MachineOptimizationRemarkAnalysis FnRemark("energy", "FunctionEnergy",
+                                               DL, &machineFunction.front());
+    FnRemark << "function " << ore::NV("Function", functionSummary.functionName)
+             << " weighted-energy=" << ore::NV("WeightedEnergy", functionSummary.weightedEnergy)
+             << " raw-energy=" << ore::NV("RawEnergy", functionSummary.rawEnergy)
+             << " instructions=" << ore::NV("InstructionCount", functionSummary.instructionCount);
+    ORE.emit(FnRemark);
+  }
+
+  // Emit per-block remarks for loop-weighted hot blocks.
+  for (const BlockSummary &blockSummary : blockSummaries) {
+    if (blockSummary.frequencyWeight <= 1.0 || blockSummary.weightedEnergy == 0.0)
+      continue;
+    DebugLoc BlockDL;
+    const MachineBasicBlock *MBB = nullptr;
+    for (const MachineBasicBlock &B : machineFunction) {
+      if (B.getName().str() == blockSummary.blockName) {
+        MBB = &B;
+        break;
+      }
+    }
+    MachineOptimizationRemarkAnalysis BlockRemark("energy", "HotBlock",
+                                                  BlockDL,
+                                                  MBB ? MBB : &machineFunction.front());
+    BlockRemark << "block " << ore::NV("Block", blockSummary.blockName)
+                << " loop-freq-weight=" << ore::NV("FrequencyWeight", blockSummary.frequencyWeight)
+                << " weighted-energy=" << ore::NV("WeightedEnergy", blockSummary.weightedEnergy);
+    ORE.emit(BlockRemark);
+  }
 
   emitEnergyRecord(json::Object{
       {"kind", "function"},
