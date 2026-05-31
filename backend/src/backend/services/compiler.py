@@ -110,12 +110,15 @@ class CompilerService:
         ]
         await self._run_command(stop_after_command)
 
+        remarks_path = workspace / self._settings.remarks_filename
         run_pass_command = [
             self._llc_path,
             "-load",
             self._settings.llvm_pass_so,
             "-run-pass=energy",
             f"-energy-model={self._settings.energy_model_path}",
+            "-pass-remarks-analysis=energy",
+            f"-pass-remarks-output={remarks_path}",
             str(mir_path),
             "-o",
             "/dev/null",
