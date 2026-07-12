@@ -15,6 +15,24 @@ def test_healthz() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_model_endpoint_serves_the_configured_cost_table() -> None:
+    response = client.get("/model")
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["target"] == "x86_64"
+    assert payload["aliasCount"] >= 70
+
+    buckets = {bucket["name"]: bucket for bucket in payload["buckets"]}
+    assert buckets["integer_alu"]["cost"] == 1.0  # the baseline unit
+    assert buckets["load"]["cost"] > buckets["integer_alu"]["cost"]
+    assert buckets["integer_alu"]["exampleOpcodes"]
+
+    # Cheapest first, so the UI table reads as a ramp.
+    costs = [bucket["cost"] for bucket in payload["buckets"]]
+    assert costs == sorted(costs)
+
+
 def test_analyze_returns_contract() -> None:
     analyzer = get_analyzer_service()
     original_emit = analyzer._compiler.emit_llvm_ir

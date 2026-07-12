@@ -26,7 +26,10 @@ public:
 
 It declares these analysis dependencies:
 
-- `MachineLoopInfo`, used to compute loop depth for each machine basic block;
+- `MachineBlockFrequencyInfo`, used to compute each block's expected execution
+  count per call;
+- `MachineLoopInfo`, used for loop depth, loop headers, and the `-O0` fallback
+  weight;
 - `MachineOptimizationRemarkEmitterPass`, used to emit LLVM analysis remarks.
 
 The pass returns `false` because it is pure analysis and does not mutate MIR.
@@ -56,23 +59,42 @@ For each machine function, the pass builds three summary types:
 
 | Summary | Key | Purpose |
 | --- | --- | --- |
-| `FunctionSummary` | function name | Function totals, block count, instruction count, mapped/fallback counts. |
-| `BlockSummary` | machine basic block | Raw/weighted block totals, loop-derived `frequencyWeight`, first source location. |
+| `FunctionSummary` | function name | Function totals, block count, instruction count, mapped/fallback counts, frequency model. |
+| `BlockSummary` | machine basic block | Raw/weighted block totals, `frequencyWeight`, loop depth/header, CFG successors, source range, and the block's instructions (capped at 40). |
 | `SourceLocationSummary` | function, file, line, column | Source-level totals and top opcode contributors. |
 
 For every `MachineInstr`:
 
-1. `EnergyModel::classify()` returns a bucket, cost, and fallback flag.
-2. The block's loop depth is converted to `frequencyWeight = 10^depth`.
+1. Meta-instructions (`DBG_VALUE`, `KILL`, `IMPLICIT_DEF`, `CFI_INSTRUCTION`)
+   are skipped — they carry no machine code into the binary, so they cost no
+   energy.
+2. `EnergyModel::classify()` returns a bucket, cost, and fallback flag.
 3. Raw energy adds the model cost.
-4. Weighted energy adds `cost * frequencyWeight`.
+4. Weighted energy adds `cost * frequencyWeight`, where `frequencyWeight` is the
+   block's expected executions per call (see below).
 5. Function and block instruction counters are incremented.
 6. If the instruction has a valid `DILocation`, the matching source summary is
    updated.
 
-The loop-depth weighting is intentionally simple and static. It follows the
-classic Ball-Larus style assumption that each loop level represents roughly 10
-iterations.
+## Frequency Weighting
+
+`frequencyWeight` comes from `MachineBlockFrequencyInfo`, normalized against the
+entry block:
+
+```text
+frequencyWeight = blockFrequency(bb) / entryFrequency
+```
+
+so it reads as "expected executions of this block per call of the function": 1.0
+for straight-line code, well above 1 inside a loop, and *below* 1 for a block
+behind a conditional branch.
+
+This depends on the machine CFG carrying real branch probabilities. At `-O0`
+clang marks every function `optnone` and SelectionDAG skips branch-probability
+analysis, leaving every branch at 50/50 — under which a loop appears to iterate
+exactly twice. The pass detects this via `Function::hasOptNone()` and falls back
+to the classic Ball-Larus style loop-depth estimate, `10^depth`. The function
+record reports which model was used in its `frequencyModel` field.
 
 ## Energy Model
 

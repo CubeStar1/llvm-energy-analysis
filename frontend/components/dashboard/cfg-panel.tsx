@@ -23,7 +23,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CfgBackEdge } from "@/components/dashboard/cfg-back-edge";
-import { CFG_NODE_HEIGHT, CFG_NODE_WIDTH, CfgNode, type CfgFlowNode } from "@/components/dashboard/cfg-node";
+import {
+  CFG_NODE_HEIGHT,
+  CFG_NODE_WIDTH,
+  CfgNode,
+  formatFrequency,
+  type CfgFlowNode,
+} from "@/components/dashboard/cfg-node";
 import { layoutGraph } from "@/lib/graph/layout";
 import type { CfgBlock, CfgFunction } from "@/lib/types";
 
@@ -165,8 +171,18 @@ export function CfgPanel({ cfg }: CfgPanelProps) {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
-          {active?.blocks.length ?? 0} blocks · dashed = back edge · n× = loop frequency weight
+        <p
+          className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground"
+          title={
+            active?.frequencyModel === "loop-depth"
+              ? "Compiled at -O0, where LLVM computes no branch probabilities. Frequencies fall back to the loop-depth heuristic: 10× per level of loop nesting."
+              : "Frequencies come from LLVM's block-frequency analysis: expected executions per call, derived from branch probabilities."
+          }
+        >
+          {active?.blocks.length ?? 0} blocks · dashed = back edge · n× ={" "}
+          {active?.frequencyModel === "loop-depth"
+            ? "loop-depth estimate (-O0)"
+            : "expected runs per call"}
         </p>
       </div>
 
@@ -245,7 +261,10 @@ function BlockDetails({
       <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-4 py-3 font-mono text-[11px]">
         <Metric label="weighted" value={`${block.weightedEnergy.toFixed(2)} e`} />
         <Metric label="raw" value={`${block.rawEnergy.toFixed(2)} e`} />
-        <Metric label="freq weight" value={`${block.frequencyWeight}×`} />
+        <Metric
+          label="runs / call"
+          value={`${formatFrequency(block.frequencyWeight)}×`}
+        />
         <Metric label="loop depth" value={String(block.loopDepth)} />
         <Metric label="instructions" value={String(block.instructionCount)} />
         <Metric label="fallback" value={String(block.fallbackInstructionCount)} />

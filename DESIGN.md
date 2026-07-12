@@ -93,7 +93,8 @@ llc -load EnergyPass.so -run-pass=energy input.mir -o /dev/null
 
 The pass requires:
 
-- `MachineLoopInfo` for static loop-depth weighting;
+- `MachineBlockFrequencyInfo` for static execution-frequency weighting;
+- `MachineLoopInfo` for loop depth, loop headers, and the `-O0` fallback weight;
 - `MachineOptimizationRemarkEmitterPass` for LLVM-native analysis remarks.
 
 ## Energy Model
@@ -120,8 +121,22 @@ same schema so the pass itself remains target-agnostic.
 ## Frequency Weighting
 
 Raw instruction cost alone under-ranks loop bodies because static MIR only
-contains one copy of the loop body. The current implementation applies a static
-loop-depth estimate:
+contains one copy of the loop body. Each block therefore carries a frequency
+weight: its expected number of executions per call of the enclosing function.
+
+The primary model is LLVM's own `MachineBlockFrequencyInfo`, which propagates
+machine branch probabilities through the CFG. This gives two things a loop-depth
+heuristic cannot:
+
+- loop bodies scale by the actual back-edge probability (LLVM's static estimate
+  is ~97% taken, implying roughly 32 iterations) rather than by a fixed constant;
+- blocks behind a conditional branch are *discounted* below 1.0 instead of being
+  costed as if they always run, so cold error paths stop inflating the estimate.
+
+The model has one precondition: real branch probabilities. At `-O0`, clang marks
+every function `optnone` and SelectionDAG never runs branch-probability analysis,
+leaving every branch at a flat 50/50 — which claims each loop iterates exactly
+twice. There the pass falls back to the classic loop-depth estimate:
 
 ```text
 depth 0 -> weight 1
@@ -129,10 +144,10 @@ depth 1 -> weight 10
 depth 2 -> weight 100
 ```
 
-This is intentionally simple and transparent. It makes nested loops visible in
-the UI without requiring runtime profiling. The tradeoff is that input-sensitive
-algorithms may look hotter or colder than they would in a real run, because the
-analysis does not know actual data sizes or branch outcomes.
+Each `function` record reports which model produced its numbers
+(`"frequencyModel": "block-frequency" | "loop-depth"`), and the CFG view labels
+the weights accordingly. Both remain static estimates: neither knows real data
+sizes, so input-sensitive algorithms may look hotter or colder than a real run.
 
 ## Output Design
 
@@ -141,9 +156,15 @@ The pass has two output channels.
 Primary channel: `[energy]` JSON lines on stderr. These are easy for the backend
 to parse and contain stable numeric fields:
 
-- `function` records for function-level totals;
-- `block` records for machine-basic-block totals and frequency weights;
+- `function` records for function-level totals and the frequency model in use;
+- `block` records for machine-basic-block totals, frequency weights, CFG
+  successors, and the block's instructions (capped at 40);
 - `line` records for source-attributed totals and top opcodes.
+
+The `block` records' `number` + `successors` fields are the control-flow graph:
+the backend groups them by function and the CFG tab renders them directly. Block
+*names* are dropped by the optimizer at `-O2`, so `number` is the identity and
+the UI falls back to the MIR-style `%bb.N` label.
 
 Secondary channel: LLVM optimization remarks YAML. These integrate with LLVM's
 remark mechanism and are useful for tools that already understand
@@ -214,8 +235,10 @@ lines as the primary backend input.
 
 - Debug information can be imperfect after optimization.
 - Inlining can remove functions or move energy into callers.
-- Static loop-depth weighting can exaggerate loops with small trip counts and
-  understate loops with large or input-dependent trip counts.
+- Static frequency weighting has no knowledge of real trip counts. LLVM's
+  block-frequency model assumes a fixed back-edge probability, so it still
+  understates loops with large or input-dependent trip counts, and the `-O0`
+  loop-depth fallback is coarser again.
 - The model treats memory operations coarsely and does not distinguish L1 hits,
   cache misses, DRAM traffic, or vector width in a calibrated way.
 - The backend currently exposes function and source-line records; block records

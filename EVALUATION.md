@@ -26,17 +26,23 @@ The pass emits two energy totals for each scope:
 | `rawEnergy` | Sum of per-instruction model costs. |
 | `weightedEnergy` | Raw instruction cost multiplied by a block frequency weight. |
 
-The current frequency model is a static loop-depth heuristic:
+The frequency model is LLVM's static block-frequency analysis:
 
 ```text
-frequencyWeight = 10 ^ loopDepth
+frequencyWeight = blockFrequency(bb) / entryFrequency
 weightedInstructionEnergy = instructionCost * frequencyWeight
 ```
 
-This means code in a top-level loop is weighted by `10`, code in a nested loop
-by `100`, and so on. The value is a hotspot ranking heuristic. It is not the
-actual runtime trip count of a `for`, `while`, priority queue, or graph
-algorithm.
+`frequencyWeight` is the block's expected executions per call of its function,
+derived from machine branch probabilities: 1.0 for straight-line code, above 1
+inside a loop, and below 1 for a block behind a conditional branch. It remains a
+hotspot ranking heuristic — it is not the actual runtime trip count of a `for`,
+`while`, priority queue, or graph algorithm.
+
+At `-O0` every function is `optnone`, so LLVM computes no branch probabilities
+and every branch sits at 50/50 (a loop would appear to run twice). The pass
+detects this and falls back to `frequencyWeight = 10 ^ loopDepth`, reporting
+`"frequencyModel": "loop-depth"` on the function record.
 
 The frontend heatmap intentionally displays weighted energy because the user is
 usually looking for hot source regions. Raw energy is still returned in the API
@@ -102,13 +108,15 @@ tests. At the time of this documentation there are 32 backend tests:
 
 | Area | Representative tests |
 | --- | --- |
-| Energy parser | Parses `[energy]` function and line JSON records, weighted energy, top opcodes, and mapped/fallback counts. |
+| Energy parser | Parses `[energy]` function, block, and line JSON records, weighted energy, top opcodes, and mapped/fallback counts. |
 | Remarks parser | Parses LLVM optimization remarks YAML with tagged documents. |
-| API contract | `POST /analyze` returns `runId`, `llvmIr`, `summary`, `functions`, `sourceAnnotations`, and `remarks`. |
+| API contract | `POST /analyze` returns `runId`, `llvmIr`, `summary`, `functions`, `sourceAnnotations`, `remarks`, `cfg`, and `ast`. |
 | Error handling | Missing toolchain/pass failures return HTTP 400 with a useful message. |
 | Report output | `POST /report` returns self-contained HTML with summary cards, function table, and annotated source. |
 | Model validation | x86-64/AArch64 bucket ordering, alias coverage, model version, and fallback consistency. |
-| Frequency weighting | Weighted energy equals raw at depth 0 and exceeds raw for loop-body records. |
+| Frequency weighting | Both models are carried through to the CFG; cold blocks keep weights below 1, and the `-O0` loop-depth fallback is reported as such. |
+| CFG construction | Blocks group by function, back edges are flagged, and an `EnergyPass.so` built without CFG fields degrades to an empty graph rather than failing. |
+| AST | Header declarations are pruned, operators are labeled past casts, implicit-cast wrappers are spliced out, the node budget is honored, and a parse failure degrades to `ast: null`. |
 
 Run the tests from the backend directory:
 
@@ -126,7 +134,10 @@ The dashboard currently provides:
 - a source editor and compile-flag controls;
 - summary cards for total weighted/raw energy, hottest function, and hottest line;
 - a weighted source heatmap;
+- an AST view (clang parse tree, tinted by the energy of each node's source range);
 - LLVM IR output;
+- a machine-level CFG per function, with per-block energy, frequency weights,
+  loop headers, back edges, and the block's instruction list;
 - LLVM/native or synthesized remarks;
 - a function ranking panel with raw, weighted, block, instruction, and fallback counts.
 
@@ -136,9 +147,10 @@ does not replace dynamic profiling for input-sensitive algorithms.
 
 ## Known Limitations
 
-- The frequency model is static and loop-depth based. It does not know actual
-  trip counts, branch probabilities, graph sizes, input data, cache behavior, or
-  priority queue sizes.
+- The frequency model is static. It uses LLVM's branch probabilities, which are
+  themselves estimates, and falls back to loop depth at `-O0`. It does not know
+  actual trip counts, graph sizes, input data, cache behavior, or priority queue
+  sizes.
 - The analysis is intra-procedural. A call site pays the `call` bucket cost but
   does not include the full callee body unless optimization inlines it.
 - Source attribution depends on debug locations. Optimizations can move,

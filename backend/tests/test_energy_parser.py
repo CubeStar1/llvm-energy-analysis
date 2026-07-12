@@ -8,7 +8,8 @@ def test_parse_energy_pass_output_extracts_functions_and_lines() -> None:
         [
             '[energy] {"kind":"function","function":"main","rawEnergy":8.0,'
             '"weightedEnergy":11.5,"blockCount":3,"instructionCount":9,'
-            '"mappedInstructionCount":8,"fallbackInstructionCount":1}',
+            '"mappedInstructionCount":8,"fallbackInstructionCount":1,'
+            '"frequencyModel":"block-frequency"}',
             '[energy] {"kind":"line","function":"main","file":"main.cpp","line":7,'
             '"column":5,"rawEnergy":3.0,"weightedEnergy":6.0,"instructionCount":2,'
             '"topOpcodes":["ADD64rr","JCC_1"]}',
@@ -21,6 +22,7 @@ def test_parse_energy_pass_output_extracts_functions_and_lines() -> None:
     assert report.functions[0].name == "main"
     assert report.functions[0].weighted_energy == 11.5
     assert report.functions[0].mapped_instruction_count == 8
+    assert report.functions[0].frequency_model == "block-frequency"
 
     assert len(report.source_annotations) == 1
     assert report.source_annotations[0].line == 7
@@ -106,6 +108,62 @@ def test_parse_energy_pass_output_tolerates_blocks_without_cfg_fields() -> None:
     assert len(cfg) == 1
     assert cfg[0].edges == []
     assert cfg[0].blocks[0].name == "entry"
+
+
+def _function_record(**overrides: object) -> str:
+    import json
+
+    record = {
+        "kind": "function",
+        "function": "main",
+        "rawEnergy": 8.0,
+        "weightedEnergy": 11.5,
+        "blockCount": 2,
+        "instructionCount": 9,
+        "mappedInstructionCount": 9,
+        "fallbackInstructionCount": 0,
+        "frequencyModel": "block-frequency",
+    }
+    record.update(overrides)
+    return f"[energy] {json.dumps(record)}"
+
+
+def test_build_cfg_carries_the_frequency_model_and_cold_blocks() -> None:
+    # At -O1+ LLVM has real branch probabilities, so a block behind a conditional
+    # branch runs less than once per call. The old loop-depth model could never
+    # produce a weight below 1.
+    stderr = "\n".join(
+        [
+            _function_record(),
+            _block_record(number=0, successors=[1, 2], frequencyWeight=1.0),
+            _block_record(number=1, successors=[2], frequencyWeight=0.16),
+            _block_record(number=2, successors=[], frequencyWeight=1.0),
+        ]
+    )
+
+    cfg = AnalyzerService(Settings())._build_cfg(parse_energy_pass_output(stderr))
+
+    assert cfg[0].frequencyModel == "block-frequency"
+    assert cfg[0].blocks[1].frequencyWeight == 0.16
+
+
+def test_build_cfg_reports_the_loop_depth_fallback() -> None:
+    # An optnone (-O0) function has no branch probabilities, so the pass falls
+    # back to 10^depth and says so; the UI labels the numbers differently.
+    stderr = "\n".join(
+        [
+            _function_record(frequencyModel="loop-depth"),
+            _block_record(number=0, successors=[1], frequencyWeight=1.0),
+            _block_record(
+                number=1, successors=[1], loopDepth=1, frequencyWeight=10.0
+            ),
+        ]
+    )
+
+    cfg = AnalyzerService(Settings())._build_cfg(parse_energy_pass_output(stderr))
+
+    assert cfg[0].frequencyModel == "loop-depth"
+    assert cfg[0].blocks[1].frequencyWeight == 10.0
 
 
 def test_build_cfg_marks_back_edges_and_groups_by_function() -> None:

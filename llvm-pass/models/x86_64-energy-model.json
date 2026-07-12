@@ -1,19 +1,19 @@
 {
   "target": "x86_64",
-  "version": 3,
+  "version": 4,
   "methodology": {
     "primaryPaper": "research/llvm-energy-scopes.pdf",
     "approach": "Instruction-level machine analysis with source-scope aggregation inspired by LLVM IR energy characterization and scope propagation. Bucket costs are relative, calibrated against published instruction-level energy data (Agner Fog instruction tables, Intel optimization reference manual, and per-instruction energy characterization literature).",
     "attribution": [
-      "Assign per-instruction energy from an explicit model.",
+      "Assign per-instruction energy from an explicit model, skipping meta-instructions (DBG_VALUE, KILL, CFI_INSTRUCTION) that emit no machine code.",
       "Aggregate raw energy at block and function scope.",
-      "Apply block-frequency weighting (loop-depth heuristic: 10^depth) for hotspot ranking.",
+      "Weight each block by its expected executions per call, from LLVM MachineBlockFrequencyInfo (branch-probability based); fall back to the loop-depth heuristic (10^depth) for optnone functions at -O0, where LLVM computes no branch probabilities.",
       "Propagate debug locations into source-line energy scopes."
     ],
     "limitations": [
       "This model is comparative and static, not a calibrated physical measurement for modern desktop x86 microarchitectures.",
       "Unmapped opcodes fall back to bucket heuristics or the default fallback cost.",
-      "Loop frequency weight uses a static 10x-per-depth estimate, not dynamic profiling."
+      "Frequency weights are static estimates. LLVM's branch probabilities assume a fixed back-edge probability rather than a real trip count, and the -O0 loop-depth fallback is coarser still. Neither is dynamic profiling."
     ]
   },
   "references": [
@@ -182,9 +182,10 @@
     "VUCOMISDrr":     "compare"
   },
   "notes": [
+    "Version 4: frequency weighting moved from the loop-depth heuristic to LLVM MachineBlockFrequencyInfo; meta-instructions no longer charged energy.",
     "Version 3: expanded alias table from 23 to ~110 x86-64 opcodes.",
     "Bucket costs validated against Agner Fog throughput tables: integer ALU baseline, memory ~2x, FP/vector ~2.8x, call ~3x.",
-    "Loop-depth frequency weighting (10^depth) now active; weighted energy > raw energy for loop-body code.",
+    "Weighted energy now exceeds raw energy for loop-body code and falls below it for blocks behind a conditional branch, which run less than once per call.",
     "The pass emits structured function, block, and line scopes so downstream consumers can evolve without changing the LLVM output format.",
     "Alias coverage should be expanded from real opcode traces collected from representative workloads."
   ]

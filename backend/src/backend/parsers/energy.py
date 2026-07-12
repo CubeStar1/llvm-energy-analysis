@@ -16,6 +16,9 @@ class ParsedFunctionEnergy:
     instruction_count: int
     mapped_instruction_count: int
     fallback_instruction_count: int
+    # "block-frequency" (LLVM branch probabilities) or "loop-depth" (the 10^d
+    # fallback used when the function is optnone, i.e. compiled at -O0).
+    frequency_model: str = "block-frequency"
 
 
 @dataclass(slots=True)
@@ -106,6 +109,8 @@ def parse_energy_pass_output(stderr: str) -> ParsedEnergyReport:
                     fallback_instruction_count=_as_int(
                         record.get("fallbackInstructionCount")
                     ),
+                    frequency_model=_as_text(record.get("frequencyModel"))
+                    or "block-frequency",
                 )
             )
             continue

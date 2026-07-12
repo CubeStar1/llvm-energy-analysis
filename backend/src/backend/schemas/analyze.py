@@ -16,6 +16,7 @@ class FunctionSummary(BaseModel):
     instructionCount: int = 0
     mappedInstructionCount: int = 0
     fallbackInstructionCount: int = 0
+    frequencyModel: str = "block-frequency"
 
 
 class SourceAnnotation(BaseModel):
@@ -63,6 +64,7 @@ class CfgEdge(BaseModel):
 class CfgFunction(BaseModel):
     function: str
     weightedEnergy: float = 0.0
+    frequencyModel: str = "block-frequency"
     blocks: list[CfgBlock] = Field(default_factory=list)
     edges: list[CfgEdge] = Field(default_factory=list)
 
@@ -112,3 +114,18 @@ class AnalyzeResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class EnergyBucket(BaseModel):
+    name: str
+    cost: float
+    opcodeCount: int = 0
+    exampleOpcodes: list[str] = Field(default_factory=list)
+
+
+class EnergyModelResponse(BaseModel):
+    target: str
+    version: int
+    defaultFallbackCost: float
+    buckets: list[EnergyBucket] = Field(default_factory=list)
+    aliasCount: int = 0

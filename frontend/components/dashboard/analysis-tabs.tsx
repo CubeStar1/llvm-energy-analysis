@@ -6,7 +6,7 @@ import { FunctionsPanel } from "@/components/dashboard/functions-panel";
 import { LlvmIrPanel } from "@/components/dashboard/llvm-ir-panel";
 import { RemarksTable } from "@/components/dashboard/remarks-table";
 import { SourceHeatmap } from "@/components/dashboard/source-heatmap";
-import { MetricsStrip } from "@/components/dashboard/metrics-strip";
+import { StatsPanel } from "@/components/dashboard/stats-panel";
 
 type AnalysisTabsProps = {
   analysis: AnalyzeResponse | null;
@@ -35,8 +35,8 @@ export function AnalysisTabs({ analysis, sourceCode, lastRunAt }: AnalysisTabsPr
             <TabsTrigger value="functions">Functions</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="stats" className="min-h-0 flex-1 h-full data-[state=active]:flex flex-col overflow-y-auto overflow-x-hidden px-1 pt-1 pb-4">
-            <MetricsStrip analysis={analysis} lastRunAt={lastRunAt} />
+          <TabsContent value="stats" className="min-h-0 flex-1 h-full data-[state=active]:flex flex-col px-1 pt-1 pb-4">
+            <StatsPanel analysis={analysis} lastRunAt={lastRunAt} />
           </TabsContent>
           <TabsContent value="source" className="min-h-0 flex-1 h-full data-[state=active]:flex flex-col pb-4">
             <SourceHeatmap sourceCode={sourceCode} analysis={analysis} />

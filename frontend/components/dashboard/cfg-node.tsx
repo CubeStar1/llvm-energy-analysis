@@ -16,6 +16,18 @@ export type CfgFlowNode = Node<CfgNodeData, "cfgBlock">;
 export const CFG_NODE_WIDTH = 236;
 export const CFG_NODE_HEIGHT = 104;
 
+/** Frequencies are expected executions per call, so 1.0 is unremarkable —
+ *  straight-line code. Anything else is worth a badge, in either direction. */
+function isFrequencyNotable(frequency: number): boolean {
+  return Math.abs(frequency - 1) >= 0.05;
+}
+
+export function formatFrequency(frequency: number): string {
+  if (frequency >= 10) return frequency.toFixed(0);
+  if (frequency >= 1) return frequency.toFixed(1);
+  return frequency.toFixed(2);
+}
+
 export function CfgNode({ data }: NodeProps<CfgFlowNode>) {
   const { block, maxWeightedEnergy, isSelected } = data;
   const level = heatLevel(block.weightedEnergy, maxWeightedEnergy);
@@ -73,15 +85,23 @@ export function CfgNode({ data }: NodeProps<CfgFlowNode>) {
               loop
             </span>
           )}
-          {block.frequencyWeight > 1 && (
-            <span
-              className="rounded-full px-1.5 py-px font-mono text-[10px] font-semibold text-background"
-              style={{ background: heatColor(Math.max(level, 1) as 1 | 2 | 3 | 4) }}
-              title={`loop depth ${block.loopDepth} → ${block.frequencyWeight}× frequency weight`}
-            >
-              {block.frequencyWeight}×
-            </span>
-          )}
+          {isFrequencyNotable(block.frequencyWeight) &&
+            (block.frequencyWeight > 1 ? (
+              <span
+                className="rounded-full px-1.5 py-px font-mono text-[10px] font-semibold text-background"
+                style={{ background: heatColor(Math.max(level, 1) as 1 | 2 | 3 | 4) }}
+                title={`expected to run ${formatFrequency(block.frequencyWeight)} per call (loop depth ${block.loopDepth})`}
+              >
+                {formatFrequency(block.frequencyWeight)}×
+              </span>
+            ) : (
+              <span
+                className="rounded-full border border-dashed border-border px-1.5 py-px font-mono text-[10px] text-muted-foreground"
+                title={`cold: expected to run ${formatFrequency(block.frequencyWeight)} per call — this block sits behind a conditional branch`}
+              >
+                {formatFrequency(block.frequencyWeight)}×
+              </span>
+            ))}
         </div>
       </div>
 

@@ -108,6 +108,13 @@ class AnalyzerService:
         for block in report.blocks:
             blocks_by_function.setdefault(block.function, []).append(block)
 
+        # The frequency model is a property of the function (it turns on whether
+        # LLVM had branch probabilities for it), and only the function record
+        # carries it.
+        models = {
+            function.name: function.frequency_model for function in report.functions
+        }
+
         cfg_functions: list[CfgFunction] = []
         for function_name, blocks in blocks_by_function.items():
             blocks.sort(key=lambda item: item.number)
@@ -136,6 +143,7 @@ class AnalyzerService:
                     weightedEnergy=round(
                         sum(block.weighted_energy for block in blocks), 3
                     ),
+                    frequencyModel=models.get(function_name, "block-frequency"),
                     blocks=[
                         CfgBlock(
                             id=block.number,
@@ -227,6 +235,7 @@ class AnalyzerService:
                     instructionCount=function.instruction_count,
                     mappedInstructionCount=function.mapped_instruction_count,
                     fallbackInstructionCount=function.fallback_instruction_count,
+                    frequencyModel=function.frequency_model,
                 )
                 for function in report.functions
             ],

@@ -4,6 +4,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -96,6 +97,7 @@ struct FunctionSummary {
   unsigned instructionCount = 0;
   unsigned mappedInstructionCount = 0;
   unsigned fallbackInstructionCount = 0;
+  std::string frequencyModel;
 };
 
 // Machine basic blocks usually lose their IR names at -O2, so fall back to the
@@ -121,6 +123,20 @@ std::string getOpcodeName(const MachineInstr &instruction) {
 double roundTo(double value, unsigned places = 6) {
   const double scale = std::pow(10.0, static_cast<double>(places));
   return std::round(value * scale) / scale;
+}
+
+// Expected executions of a block per call of its function. LLVM stores block
+// frequencies as integers scaled against the entry block, so dividing by the
+// entry frequency recovers the ratio: 1.0 for straight-line code, >1 inside a
+// loop, <1 behind a conditional branch.
+double relativeBlockFrequency(BlockFrequency blockFrequency,
+                              double entryFrequency) {
+  if (entryFrequency <= 0.0) {
+    return 1.0;
+  }
+  return roundTo(static_cast<double>(blockFrequency.getFrequency()) /
+                     entryFrequency,
+                 3);
 }
 
 std::string getSourceFilePath(const DILocation *location) {
@@ -175,6 +191,7 @@ INITIALIZE_PASS_BEGIN(
     "Machine-level energy estimation pass",
     false,
     true)
+INITIALIZE_PASS_DEPENDENCY(MachineBlockFrequencyInfo)
 INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
 INITIALIZE_PASS_DEPENDENCY(MachineOptimizationRemarkEmitterPass)
 INITIALIZE_PASS_END(
@@ -188,6 +205,7 @@ EnergyAnalysisPass::EnergyAnalysisPass() : MachineFunctionPass(ID) {}
 
 void EnergyAnalysisPass::getAnalysisUsage(AnalysisUsage &analysisUsage) const {
   MachineFunctionPass::getAnalysisUsage(analysisUsage);
+  analysisUsage.addRequired<MachineBlockFrequencyInfo>();
   analysisUsage.addRequired<MachineLoopInfo>();
   analysisUsage.addRequired<MachineOptimizationRemarkEmitterPass>();
   analysisUsage.setPreservesAll();
@@ -197,16 +215,35 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
   const energy::EnergyModel model =
       energy::EnergyModel::loadOrCreateDefault(EnergyModelPath);
 
-  // Loop-depth static frequency heuristic: depth d → weight 10^d.
-  // This matches the classic static profiler estimate (10 iterations per loop)
-  // from Ball & Larus, PLDI 1994, and is used by several LLVM analysis passes.
+  // Static execution-frequency model. LLVM's MachineBlockFrequencyInfo
+  // propagates branch probabilities through the CFG, so a block's weight is its
+  // expected execution count relative to one call of the function: loop bodies
+  // scale up (a back edge is taken ~97% of the time, implying ~32 iterations),
+  // and blocks behind a conditional branch are discounted rather than costed as
+  // if they always run.
+  //
+  // It has one precondition: real branch probabilities. At -O0 clang marks every
+  // function optnone and SelectionDAG never runs branch-probability analysis, so
+  // every branch is left at a flat 50/50 — which says a loop iterates twice, and
+  // would rank loop bodies barely above straight-line code. There we fall back
+  // to the loop-depth heuristic (depth d -> 10^d, the Ball & Larus static
+  // profiler estimate): still an assumption, but a deliberate one.
+  const bool hasBranchProbabilities =
+      !machineFunction.getFunction().hasOptNone();
+  const MachineBlockFrequencyInfo &blockFrequencyInfo =
+      getAnalysis<MachineBlockFrequencyInfo>();
   const MachineLoopInfo &loopInfo = getAnalysis<MachineLoopInfo>();
   MachineOptimizationRemarkEmitter &ORE =
       getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE();
 
+  const double entryFrequency =
+      static_cast<double>(blockFrequencyInfo.getEntryFreq().getFrequency());
+
   FunctionSummary functionSummary;
   functionSummary.functionName = machineFunction.getName().str();
   functionSummary.blockCount = static_cast<unsigned>(machineFunction.size());
+  functionSummary.frequencyModel =
+      hasBranchProbabilities ? "block-frequency" : "loop-depth";
   std::vector<BlockSummary> blockSummaries;
   std::map<SourceLocationKey, SourceLocationSummary> sourceSummaries;
 
@@ -214,10 +251,13 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
     BlockSummary blockSummary;
     blockSummary.blockName = block.getName().str();
     blockSummary.number = block.getNumber();
-    const unsigned loopDepth = loopInfo.getLoopDepth(&block);
-    blockSummary.loopDepth = loopDepth;
+    blockSummary.loopDepth = loopInfo.getLoopDepth(&block);
     blockSummary.isLoopHeader = loopInfo.isLoopHeader(&block);
-    blockSummary.frequencyWeight = std::pow(10.0, static_cast<double>(loopDepth));
+    blockSummary.frequencyWeight =
+        hasBranchProbabilities
+            ? relativeBlockFrequency(blockFrequencyInfo.getBlockFreq(&block),
+                                     entryFrequency)
+            : std::pow(10.0, static_cast<double>(blockSummary.loopDepth));
 
     for (const MachineBasicBlock *successor : block.successors()) {
       blockSummary.successors.push_back(successor->getNumber());
@@ -340,7 +380,7 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
                                                   BlockDL,
                                                   MBB ? MBB : &machineFunction.front());
     BlockRemark << "block " << ore::NV("Block", displayBlockName(blockSummary))
-                << " loop-freq-weight="
+                << " freq-weight="
                 << ore::NV("FrequencyWeight",
                            static_cast<float>(blockSummary.frequencyWeight))
                 << " weighted-energy="
@@ -358,6 +398,7 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
       {"instructionCount", functionSummary.instructionCount},
       {"mappedInstructionCount", functionSummary.mappedInstructionCount},
       {"fallbackInstructionCount", functionSummary.fallbackInstructionCount},
+      {"frequencyModel", functionSummary.frequencyModel},
   });
 
   for (const BlockSummary &blockSummary : blockSummaries) {
