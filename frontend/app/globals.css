@@ -143,3 +143,187 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 }
+
+@utility -webkit-overflow-scrolling-touch {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Revamp Landing Page Styles */
+:root {
+  --grid-line-light: rgba(0, 0, 0, 0.08);
+  --grid-line-dark: rgba(255, 255, 255, 0.06);
+
+  --color-success-50: rgb(229, 242, 247);
+  --color-success-100: rgb(229, 242, 247);
+  --color-success-150: rgb(178, 217, 231);
+  --color-success-250: rgb(128, 191, 215);
+  --color-base-750: rgb(60, 60, 60);
+}
+
+.dark {
+  --grid-line-light: rgba(255, 255, 255, 0.04);
+  --grid-line-dark: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] {
+  --base: 20px;
+  --font-body-size: 18px;
+
+  --gutter-h: calc(50vw - 800px);
+
+  --column: calc((100vw - (var(--gutter-h) * 2)) / 16);
+
+  --block-spacing: 7rem;
+}
+
+@media (max-width: 1920px) {
+  [data-theme='dark'] {
+    --gutter-h: 160px;
+  }
+}
+
+@media (max-width: 1600px) {
+  [data-theme='dark'] {
+    --base: 16px;
+    --gutter-h: 64px;
+    --block-spacing: 5rem;
+  }
+}
+
+@media (max-width: 1024px) {
+  [data-theme='dark'] {
+    --gutter-h: 32px;
+    --block-spacing: 3.5rem;
+    --column: calc((100vw - (var(--gutter-h) * 2)) / 8);
+  }
+}
+
+@media (max-width: 768px) {
+  [data-theme='dark'] {
+    --gutter-h: 16px;
+    --block-spacing: 2rem;
+  }
+}
+
+@keyframes fade-in-up {
+  0% {
+    opacity: 0;
+    transform: translateY(1rem);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: translateY(calc(-50% + 1rem)) rotate(0deg);
+  }
+  to {
+    transform: translateY(calc(-50% + 1rem)) rotate(360deg);
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes gradient-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@layer utilities {
+  .animate-fade-in-up {
+    animation: fade-in-up 0.8s ease-out forwards;
+  }
+
+  .animate-spin-slow {
+    animation: spin-slow 10s linear infinite;
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  .animate-gradient-shift {
+    animation: gradient-shift 8s ease infinite;
+    background-size: 200% 200%;
+  }
+
+  .duration-400 {
+    transition-duration: 400ms;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@utility -webkit-overflow-scrolling-touch {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Modern Minimal Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+/* Track */
+::-webkit-scrollbar-track {
+  background: transparent; /* seamless look */
+  border-radius: 9999px;
+}
+
+/* Light Mode - Thumb */
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 100, 100, 0.4); /* subtle gray */
+  border-radius: 9999px;
+}
+
+/* Light Mode - Thumb Hover */
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 100, 100, 0.6);
+}
+
+/* Dark Mode - Track */
+.dark ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Dark Mode - Thumb */
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(200, 200, 200, 0.3); /* lighter for dark bg */
+}
+
+/* Dark Mode - Thumb Hover */
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 200, 200, 0.5);
+}

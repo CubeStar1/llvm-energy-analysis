@@ -17,8 +17,8 @@ export interface HeaderConfig {
 
 export const headerConfig: HeaderConfig = {
   brand: {
-    title: "RPA",
-    icon: "/next.svg"
+    title: "LLVM Energy",
+    icon: "/logos/llvm-logo.png"
   },
   navigationLinks: [
     {
@@ -26,8 +26,12 @@ export const headerConfig: HeaderConfig = {
       label: "Home"
     },
     {
-      href: "/projects",
-      label: "Projects"
+      href: "/analyze",
+      label: "Analyze"
+    },
+    {
+      href: "/methodology",
+      label: "Methodology"
     }
   ]
 }
