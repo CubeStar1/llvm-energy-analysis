@@ -1,5 +1,7 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AnalyzeResponse } from "@/lib/types";
+import { AstPanel } from "@/components/dashboard/ast-panel";
+import { CfgPanel } from "@/components/dashboard/cfg-panel";
 import { FunctionsPanel } from "@/components/dashboard/functions-panel";
 import { LlvmIrPanel } from "@/components/dashboard/llvm-ir-panel";
 import { RemarksTable } from "@/components/dashboard/remarks-table";
@@ -23,9 +25,12 @@ export function AnalysisTabs({ analysis, sourceCode, lastRunAt }: AnalysisTabsPr
       <div className="flex-1 px-4 min-h-0">
         <Tabs defaultValue="stats" className="flex flex-col h-full min-h-0">
           <TabsList className="mb-3 w-full justify-start overflow-x-auto">
+            {/* Ordered to follow the compiler pipeline: source → AST → IR → machine CFG. */}
             <TabsTrigger value="stats">Stats</TabsTrigger>
             <TabsTrigger value="source">Source</TabsTrigger>
+            <TabsTrigger value="ast">AST</TabsTrigger>
             <TabsTrigger value="llvm-ir">LLVM IR</TabsTrigger>
+            <TabsTrigger value="cfg">CFG</TabsTrigger>
             <TabsTrigger value="remarks">Remarks</TabsTrigger>
             <TabsTrigger value="functions">Functions</TabsTrigger>
           </TabsList>
@@ -36,8 +41,14 @@ export function AnalysisTabs({ analysis, sourceCode, lastRunAt }: AnalysisTabsPr
           <TabsContent value="source" className="min-h-0 flex-1 h-full data-[state=active]:flex flex-col pb-4">
             <SourceHeatmap sourceCode={sourceCode} analysis={analysis} />
           </TabsContent>
+          <TabsContent value="ast" className="min-h-0 flex-1 h-full data-[state=active]:flex flex-col pb-4">
+            <AstPanel ast={analysis?.ast ?? null} />
+          </TabsContent>
           <TabsContent value="llvm-ir" className="min-h-0 flex-1 h-full data-[state=active]:flex flex-col pb-4">
             <LlvmIrPanel llvmIr={analysis?.llvmIr ?? ""} />
+          </TabsContent>
+          <TabsContent value="cfg" className="min-h-0 flex-1 h-full data-[state=active]:flex flex-col pb-4">
+            <CfgPanel cfg={analysis?.cfg ?? []} />
           </TabsContent>
           <TabsContent value="remarks" className="min-h-0 flex-1 h-full data-[state=active]:flex flex-col pb-4">
             <RemarksTable remarks={analysis?.remarks ?? []} />

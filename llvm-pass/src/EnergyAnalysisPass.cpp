@@ -56,17 +56,36 @@ struct SourceLocationSummary {
   std::map<std::string, double> opcodeWeightedEnergy;
 };
 
+// A single machine instruction as shown inside a CFG node in the UI.
+struct InstructionDetail {
+  std::string opcode;
+  std::string bucket;
+  double cost = 0.0;
+  unsigned line = 0;
+};
+
+// Cap on the instructions carried per block so a large function cannot blow up
+// the JSON payload; the UI shows a "+N more" hint when truncated.
+constexpr std::size_t MaxReportedInstructions = 40;
+
 struct BlockSummary {
   std::string blockName;
+  int number = 0;
   double rawEnergy = 0.0;
   double weightedEnergy = 0.0;
   double frequencyWeight = 1.0;
+  unsigned loopDepth = 0;
+  bool isLoopHeader = false;
   unsigned instructionCount = 0;
   unsigned mappedInstructionCount = 0;
   unsigned fallbackInstructionCount = 0;
   std::string file;
   unsigned line = 0;
   unsigned column = 0;
+  unsigned endLine = 0;
+  std::vector<int> successors;
+  std::vector<InstructionDetail> instructions;
+  std::map<std::string, double> opcodeWeightedEnergy;
 };
 
 struct FunctionSummary {
@@ -78,6 +97,15 @@ struct FunctionSummary {
   unsigned mappedInstructionCount = 0;
   unsigned fallbackInstructionCount = 0;
 };
+
+// Machine basic blocks usually lose their IR names at -O2, so fall back to the
+// MIR-style %bb.N label the block number gives us.
+std::string displayBlockName(const BlockSummary &blockSummary) {
+  if (!blockSummary.blockName.empty()) {
+    return blockSummary.blockName;
+  }
+  return "%bb." + std::to_string(blockSummary.number);
+}
 
 std::string getOpcodeName(const MachineInstr &instruction) {
   if (const auto *block = instruction.getParent()) {
@@ -185,14 +213,29 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
   for (const MachineBasicBlock &block : machineFunction) {
     BlockSummary blockSummary;
     blockSummary.blockName = block.getName().str();
+    blockSummary.number = block.getNumber();
     const unsigned loopDepth = loopInfo.getLoopDepth(&block);
+    blockSummary.loopDepth = loopDepth;
+    blockSummary.isLoopHeader = loopInfo.isLoopHeader(&block);
     blockSummary.frequencyWeight = std::pow(10.0, static_cast<double>(loopDepth));
 
+    for (const MachineBasicBlock *successor : block.successors()) {
+      blockSummary.successors.push_back(successor->getNumber());
+    }
+
     for (const MachineInstr &instruction : block) {
+      // Meta-instructions (DBG_VALUE, KILL, IMPLICIT_DEF, CFI_INSTRUCTION, ...)
+      // carry no machine code into the binary, so they cost no energy.
+      if (instruction.isMetaInstruction()) {
+        continue;
+      }
+
       const energy::InstructionEnergy instructionEnergy =
           model.classify(instruction);
       const double weightedInstructionEnergy =
           instructionEnergy.cost * blockSummary.frequencyWeight;
+      const std::string opcodeName = getOpcodeName(instruction);
+      blockSummary.opcodeWeightedEnergy[opcodeName] += weightedInstructionEnergy;
 
       ++blockSummary.instructionCount;
       ++functionSummary.instructionCount;
@@ -211,20 +254,34 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
 
       const DebugLoc &debugLocation = instruction.getDebugLoc();
       const DILocation *location = debugLocation.get();
-      if (location == nullptr || location->getLine() == 0) {
+      const unsigned instructionLine =
+          (location != nullptr) ? location->getLine() : 0;
+
+      if (blockSummary.instructions.size() < MaxReportedInstructions) {
+        blockSummary.instructions.push_back(InstructionDetail{
+            opcodeName,
+            instructionEnergy.bucket,
+            roundTo(instructionEnergy.cost),
+            instructionLine,
+        });
+      }
+
+      if (location == nullptr || instructionLine == 0) {
         continue;
       }
 
-      if (blockSummary.file.empty()) {
+      if (blockSummary.line == 0) {
         blockSummary.file = getSourceFilePath(location);
-        blockSummary.line = location->getLine();
+        blockSummary.line = instructionLine;
         blockSummary.column = location->getColumn();
       }
+      blockSummary.line = std::min(blockSummary.line, instructionLine);
+      blockSummary.endLine = std::max(blockSummary.endLine, instructionLine);
 
       SourceLocationKey key;
       key.functionName = functionSummary.functionName;
       key.file = getSourceFilePath(location);
-      key.line = location->getLine();
+      key.line = instructionLine;
       key.column = location->getColumn();
       if (key.file.empty()) {
         continue;
@@ -234,8 +291,7 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
       sourceSummary.rawEnergy += instructionEnergy.cost;
       sourceSummary.weightedEnergy += weightedInstructionEnergy;
       ++sourceSummary.instructionCount;
-      sourceSummary.opcodeWeightedEnergy[getOpcodeName(instruction)] +=
-          weightedInstructionEnergy;
+      sourceSummary.opcodeWeightedEnergy[opcodeName] += weightedInstructionEnergy;
     }
 
     blockSummary.rawEnergy = roundTo(blockSummary.rawEnergy);
@@ -275,7 +331,7 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
     DebugLoc BlockDL;
     const MachineBasicBlock *MBB = nullptr;
     for (const MachineBasicBlock &B : machineFunction) {
-      if (B.getName().str() == blockSummary.blockName) {
+      if (B.getNumber() == blockSummary.number) {
         MBB = &B;
         break;
       }
@@ -283,7 +339,7 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
     MachineOptimizationRemarkAnalysis BlockRemark("energy", "HotBlock",
                                                   BlockDL,
                                                   MBB ? MBB : &machineFunction.front());
-    BlockRemark << "block " << ore::NV("Block", blockSummary.blockName)
+    BlockRemark << "block " << ore::NV("Block", displayBlockName(blockSummary))
                 << " loop-freq-weight="
                 << ore::NV("FrequencyWeight",
                            static_cast<float>(blockSummary.frequencyWeight))
@@ -305,19 +361,50 @@ bool EnergyAnalysisPass::runOnMachineFunction(MachineFunction &machineFunction) 
   });
 
   for (const BlockSummary &blockSummary : blockSummaries) {
+    json::Array successors;
+    for (const int successor : blockSummary.successors) {
+      successors.push_back(successor);
+    }
+
+    json::Array topOpcodes;
+    for (const std::string &opcode :
+         collectTopOpcodes(blockSummary.opcodeWeightedEnergy)) {
+      topOpcodes.push_back(opcode);
+    }
+
+    json::Array instructions;
+    for (const InstructionDetail &detail : blockSummary.instructions) {
+      instructions.push_back(json::Object{
+          {"opcode", detail.opcode},
+          {"bucket", detail.bucket},
+          {"cost", detail.cost},
+          {"line", detail.line},
+      });
+    }
+
     emitEnergyRecord(json::Object{
         {"kind", "block"},
         {"function", functionSummary.functionName},
         {"block", blockSummary.blockName},
+        {"number", blockSummary.number},
+        {"successors", std::move(successors)},
         {"rawEnergy", blockSummary.rawEnergy},
         {"weightedEnergy", blockSummary.weightedEnergy},
         {"frequencyWeight", blockSummary.frequencyWeight},
+        {"loopDepth", blockSummary.loopDepth},
+        {"isLoopHeader", blockSummary.isLoopHeader},
         {"instructionCount", blockSummary.instructionCount},
         {"mappedInstructionCount", blockSummary.mappedInstructionCount},
         {"fallbackInstructionCount", blockSummary.fallbackInstructionCount},
         {"file", blockSummary.file},
         {"line", blockSummary.line},
         {"column", blockSummary.column},
+        {"endLine", blockSummary.endLine},
+        {"topOpcodes", std::move(topOpcodes)},
+        {"instructions", std::move(instructions)},
+        {"instructionsTruncated",
+         blockSummary.instructionCount >
+             static_cast<unsigned>(blockSummary.instructions.size())},
     });
   }
 

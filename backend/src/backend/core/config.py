@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     default_std: str = "c++20"
     default_optimization_flags: list[str] = Field(default_factory=lambda: ["-O2"])
     remarks_filename: str = "energy-remarks.yaml"
+    # Empty means "probe the well-known system paths"; see AstService.
+    libclang_library: str = ""
     llvm_pass_so: str = str(
         Path(__file__).resolve().parents[4] / "llvm-pass" / "build" / "EnergyPass.so"
     )

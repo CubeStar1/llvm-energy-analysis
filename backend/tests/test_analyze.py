@@ -22,6 +22,7 @@ def test_analyze_returns_contract() -> None:
     async def fake_emit_llvm_ir(*_args, **_kwargs):
         from backend.services.compiler import CompilerOutput, EnergyPassResult
         from backend.parsers.energy import (
+            ParsedBlockEnergy,
             ParsedEnergyReport,
             ParsedFunctionEnergy,
             ParsedSourceAnnotation,
@@ -32,6 +33,42 @@ def test_analyze_returns_contract() -> None:
             compile_command=["clang++", "main.cpp"],
             energy_result=EnergyPassResult(
                 report=ParsedEnergyReport(
+                    blocks=[
+                        ParsedBlockEnergy(
+                            function="main",
+                            number=0,
+                            name="",
+                            raw_energy=1.8,
+                            weighted_energy=1.8,
+                            frequency_weight=1.0,
+                            loop_depth=0,
+                            is_loop_header=False,
+                            instruction_count=2,
+                            mapped_instruction_count=2,
+                            fallback_instruction_count=0,
+                            file="main.cpp",
+                            line=2,
+                            end_line=2,
+                            successors=[1],
+                        ),
+                        ParsedBlockEnergy(
+                            function="main",
+                            number=1,
+                            name="",
+                            raw_energy=1.8,
+                            weighted_energy=18.0,
+                            frequency_weight=10.0,
+                            loop_depth=1,
+                            is_loop_header=True,
+                            instruction_count=3,
+                            mapped_instruction_count=2,
+                            fallback_instruction_count=1,
+                            file="main.cpp",
+                            line=2,
+                            end_line=2,
+                            successors=[1],
+                        ),
+                    ],
                     functions=[
                         ParsedFunctionEnergy(
                             name="main",
@@ -92,6 +129,20 @@ def test_analyze_returns_contract() -> None:
     assert payload["remarks"][0]["pass"] == "energy"
     assert payload["sourceAnnotations"][0]["line"] == 2
     assert payload["sourceAnnotations"][0]["topOpcodes"] == ["ADD64rr", "CMP64rr"]
+
+    cfg = payload["cfg"][0]
+    assert cfg["function"] == "main"
+    assert [block["name"] for block in cfg["blocks"]] == ["%bb.0", "%bb.1"]
+    assert cfg["blocks"][1]["isLoopHeader"] is True
+    assert cfg["blocks"][1]["frequencyWeight"] == 10.0
+    assert {"source": 1, "target": 1, "isBackEdge": True} in cfg["edges"]
+    assert {"source": 0, "target": 1, "isBackEdge": False} in cfg["edges"]
+
+    # The AST comes from the real clang, which the test environment may lack;
+    # either way the analysis must succeed.
+    if payload["ast"] is not None:
+        assert payload["ast"]["kind"] == "TranslationUnitDecl"
+        assert payload["ast"]["children"][0]["label"] == "main"
 
 
 def test_analyze_returns_400_on_missing_toolchain() -> None:

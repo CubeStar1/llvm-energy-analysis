@@ -19,6 +19,40 @@ class ParsedFunctionEnergy:
 
 
 @dataclass(slots=True)
+class ParsedInstruction:
+    opcode: str
+    bucket: str
+    cost: float
+    line: int
+
+
+@dataclass(slots=True)
+class ParsedBlockEnergy:
+    function: str
+    number: int
+    name: str
+    raw_energy: float
+    weighted_energy: float
+    frequency_weight: float
+    loop_depth: int
+    is_loop_header: bool
+    instruction_count: int
+    mapped_instruction_count: int
+    fallback_instruction_count: int
+    file: str
+    line: int
+    end_line: int
+    successors: list[int] = field(default_factory=list)
+    top_opcodes: list[str] = field(default_factory=list)
+    instructions: list[ParsedInstruction] = field(default_factory=list)
+    instructions_truncated: bool = False
+
+    @property
+    def display_name(self) -> str:
+        return self.name or f"%bb.{self.number}"
+
+
+@dataclass(slots=True)
 class ParsedSourceAnnotation:
     function: str
     file: str
@@ -34,6 +68,7 @@ class ParsedSourceAnnotation:
 class ParsedEnergyReport:
     functions: list[ParsedFunctionEnergy] = field(default_factory=list)
     source_annotations: list[ParsedSourceAnnotation] = field(default_factory=list)
+    blocks: list[ParsedBlockEnergy] = field(default_factory=list)
 
 
 def parse_energy_pass_output(stderr: str) -> ParsedEnergyReport:
@@ -70,6 +105,40 @@ def parse_energy_pass_output(stderr: str) -> ParsedEnergyReport:
                     ),
                     fallback_instruction_count=_as_int(
                         record.get("fallbackInstructionCount")
+                    ),
+                )
+            )
+            continue
+
+        if kind == "block":
+            function_name = _as_text(record.get("function"))
+            if not function_name:
+                continue
+            report.blocks.append(
+                ParsedBlockEnergy(
+                    function=function_name,
+                    number=_as_int(record.get("number")),
+                    name=_as_text(record.get("block")),
+                    raw_energy=_as_float(record.get("rawEnergy")),
+                    weighted_energy=_as_float(record.get("weightedEnergy")),
+                    frequency_weight=_as_float(record.get("frequencyWeight")) or 1.0,
+                    loop_depth=_as_int(record.get("loopDepth")),
+                    is_loop_header=bool(record.get("isLoopHeader", False)),
+                    instruction_count=_as_int(record.get("instructionCount")),
+                    mapped_instruction_count=_as_int(
+                        record.get("mappedInstructionCount")
+                    ),
+                    fallback_instruction_count=_as_int(
+                        record.get("fallbackInstructionCount")
+                    ),
+                    file=_as_text(record.get("file")),
+                    line=_as_int(record.get("line")),
+                    end_line=_as_int(record.get("endLine")),
+                    successors=_as_int_list(record.get("successors")),
+                    top_opcodes=_as_text_list(record.get("topOpcodes")),
+                    instructions=_as_instructions(record.get("instructions")),
+                    instructions_truncated=bool(
+                        record.get("instructionsTruncated", False)
                     ),
                 )
             )
@@ -139,3 +208,24 @@ def _as_text_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def _as_int_list(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [_as_int(item) for item in value if isinstance(item, (int, float, str))]
+
+
+def _as_instructions(value: object) -> list[ParsedInstruction]:
+    if not isinstance(value, list):
+        return []
+    return [
+        ParsedInstruction(
+            opcode=_as_text(item.get("opcode")),
+            bucket=_as_text(item.get("bucket")),
+            cost=_as_float(item.get("cost")),
+            line=_as_int(item.get("line")),
+        )
+        for item in value
+        if isinstance(item, dict)
+    ]

@@ -32,6 +32,59 @@ export type SourceAnnotation = {
   topOpcodes: string[];
 };
 
+export type BlockInstruction = {
+  opcode: string;
+  bucket: string;
+  cost: number;
+  line: number;
+};
+
+export type CfgBlock = {
+  id: number;
+  name: string;
+  rawEnergy: number;
+  weightedEnergy: number;
+  frequencyWeight: number;
+  loopDepth: number;
+  isLoopHeader: boolean;
+  isEntry: boolean;
+  instructionCount: number;
+  mappedInstructionCount: number;
+  fallbackInstructionCount: number;
+  line: number;
+  endLine: number;
+  topOpcodes: string[];
+  instructions: BlockInstruction[];
+  instructionsTruncated: boolean;
+};
+
+export type CfgEdge = {
+  source: number;
+  target: number;
+  isBackEdge: boolean;
+};
+
+export type CfgFunction = {
+  function: string;
+  weightedEnergy: number;
+  blocks: CfgBlock[];
+  edges: CfgEdge[];
+};
+
+export type AstNode = {
+  id: string;
+  kind: string;
+  label: string;
+  detail: string;
+  line: number;
+  column: number;
+  endLine: number;
+  selfEnergy: number;
+  subtreeEnergy: number;
+  truncated: boolean;
+  children: AstNode[];
+};
+
 export type Remark = {
   kind: string;
   pass: string;
@@ -50,4 +103,6 @@ export type AnalyzeResponse = {
   functions: FunctionSummary[];
   sourceAnnotations: SourceAnnotation[];
   remarks: Remark[];
+  cfg: CfgFunction[];
+  ast: AstNode | null;
 };
