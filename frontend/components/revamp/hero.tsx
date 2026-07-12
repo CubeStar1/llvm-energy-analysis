@@ -157,7 +157,7 @@ export function Hero() {
             >
               <div className="bg-[#141414] rounded overflow-hidden border border-white/5 shadow-sm">
                 <Image
-                  src="/landing/energy-dash.png"
+                  src="/landing/llvm-energy-cfg.png"
                   alt="LLVM Energy Analyzer Dashboard Preview"
                   width={2400}
                   height={1600}
@@ -178,7 +178,7 @@ export function Hero() {
           <div className="rounded-lg border border-white/5 bg-white/5 p-1 backdrop-blur-sm">
             <div className="rounded overflow-hidden bg-[#141414] border border-white/5 shadow-sm">
               <Image
-                src="/landing/energy-dash.png"
+                src="/landing/llvm-energy-cfg.png"
                 alt="LLVM Energy Analyzer Dashboard"
                 width={1200}
                 height={800}

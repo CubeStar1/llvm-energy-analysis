@@ -21,25 +21,25 @@ const highlights: Highlight[] = [
     text: 'Instruction Classification',
     description:
       'Classifies Machine IR instructions into cost buckets — integer ALU, compare, branch, load, store, FP/vector, call — using JSON-defined per-target energy models.',
-    image: '/landing/instruction-classification.png',
+    image: '/landing/llvm-energy-cfg.png',
   },
   {
     text: 'Loop-Depth Weighting',
     description:
       'Static loop depth weighting (1x / 10x / 100x) surfaces functions that are genuinely hot at runtime, not just functions with the most instructions.',
-    image: '/landing/loop-depth-weighting.png',
+    image: '/landing/llvm-energy-cfg.png',
   },
   {
     text: 'Source-Level Annotations',
     description:
       'Maps machine-level energy costs back to source lines, so you can jump straight from a hot function to the exact statement driving the cost.',
-    image: '/landing/source-annotations.png',
+    image: '/landing/llvm-energy-cfg.png',
   },
   {
     text: 'Optimization Remarks',
     description:
       "Parses LLVM's optimization-remarks YAML alongside energy results to explain why a function did — or didn't — optimize the way you expected.",
-    image: '/landing/optimization-remarks.png',
+    image: '/landing/llvm-energy-cfg.png',
   },
 ]
 
