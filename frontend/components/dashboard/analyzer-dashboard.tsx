@@ -10,7 +10,7 @@ import { EditorPanel } from "@/components/dashboard/editor-panel";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { DashboardToolbar } from "@/components/dashboard/dashboard-toolbar";
 
-const DEFAULT_FLAGS = "-O2";
+const DEFAULT_FLAGS = "-O0";
 
 export function AnalyzerDashboard() {
   const [code, setCode] = useState(DEFAULT_SOURCE_CODE);
