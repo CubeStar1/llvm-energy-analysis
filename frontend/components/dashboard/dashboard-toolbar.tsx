@@ -1,11 +1,20 @@
 "use client";
 
-import { Play, RefreshCcw } from "lucide-react";
+import { ChevronDown, FlaskConical, Play, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { ModeToggle } from "@/components/global/theme-switcher";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { SAMPLE_PROGRAMS, type SampleProgram, type SampleTier } from "@/lib/samples";
 
 type DashboardToolbarProps = {
   std: string;
@@ -14,7 +23,10 @@ type DashboardToolbarProps = {
   onStdChange: (value: string) => void;
   onCompilerFlagsChange: (value: string) => void;
   onRunAnalysis: () => void;
+  onLoadSample: (sample: SampleProgram) => void;
 };
+
+const TIER_ORDER: SampleTier[] = ["Basic", "Intermediate", "Advanced"];
 
 export function DashboardToolbar({
   std,
@@ -23,13 +35,53 @@ export function DashboardToolbar({
   onStdChange,
   onCompilerFlagsChange,
   onRunAnalysis,
+  onLoadSample,
 }: DashboardToolbarProps) {
   return (
     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 rounded-xl border bg-card p-3 shadow-sm shrink-0">
       <div className="flex items-center gap-3 w-full sm:w-auto">
         <SidebarTrigger className="-ml-1" />
         <Separator orientation="vertical" className="h-6" />
-        
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-2">
+              <FlaskConical className="size-3.5" />
+              Sample programs
+              <ChevronDown className="size-3.5 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-80">
+            {TIER_ORDER.map((tier, tierIndex) => {
+              const samplesInTier = SAMPLE_PROGRAMS.filter((sample) => sample.tier === tier);
+              if (samplesInTier.length === 0) {
+                return null;
+              }
+
+              return (
+                <div key={tier}>
+                  {tierIndex > 0 && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel>{tier}</DropdownMenuLabel>
+                  {samplesInTier.map((sample) => (
+                    <DropdownMenuItem
+                      key={sample.id}
+                      onSelect={() => onLoadSample(sample)}
+                      className="flex-col items-start gap-0.5"
+                    >
+                      <span className="text-sm font-medium">{sample.label}</span>
+                      <span className="text-xs font-normal text-muted-foreground">
+                        {sample.description}
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                </div>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <Separator orientation="vertical" className="h-6" />
+
         <label className="flex items-center gap-2">
           <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground whitespace-nowrap">
             Std

@@ -3,6 +3,7 @@
 import { useDeferredValue, useMemo, useState, useTransition } from "react";
 import { analyzeCode } from "@/lib/api";
 import { DEFAULT_SOURCE_CODE } from "@/lib/sample-program";
+import type { SampleProgram } from "@/lib/samples";
 import type { AnalyzeResponse } from "@/lib/types";
 import { AnalysisTabs } from "@/components/dashboard/analysis-tabs";
 import { EditorPanel } from "@/components/dashboard/editor-panel";
@@ -50,6 +51,13 @@ export function AnalyzerDashboard() {
     }
   }
 
+  function handleLoadSample(sample: SampleProgram) {
+    setCode(sample.code);
+    setAnalysis(null);
+    setError(null);
+    setLastRunAt(null);
+  }
+
   const isBusy = isRunning || isPending;
 
   return (
@@ -61,6 +69,7 @@ export function AnalyzerDashboard() {
         onStdChange={setStd}
         onCompilerFlagsChange={setCompilerFlags}
         onRunAnalysis={handleRunAnalysis}
+        onLoadSample={handleLoadSample}
       />
 
 
